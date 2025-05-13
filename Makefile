@@ -3,7 +3,7 @@ CXXFLAGS = -std=c++17 -Wall
 
 OBJS = main.o Rover.o Plane.o Copter.o
 
-all: interpreter
+all: interpreter speaker
 
 interpreter: $(OBJS)
 	$(CXX) $(CXXFLAGS) -o interpreter $(OBJS)
@@ -20,5 +20,11 @@ Plane.o: Plane.cpp Plane.h
 Copter.o: Copter.cpp Copter.h
 	$(CXX) $(CXXFLAGS) -c Copter.cpp
 
+Speaker.o: Speaker.cpp
+	$(CXX) $(CXXFLAGS) -c Speaker.cpp
+
+speaker: Speaker.o
+	$(CXX) $(CXXFLAGS) -o speaker Speaker.o
+
 clean:
-	rm -f *.o interpreter
+	rm -f *.o interpreter speaker
