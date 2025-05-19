@@ -4,7 +4,6 @@
 
 class Plane : public Vehicle {
 public:
-    std::string getName() const override { return "Plane"; }
-    void executeCommand(const Command& cmd) override;
-    bool validateCommand(const Command& cmd) const override;
+    std::string getName() const override { return "Plane"; };
+    bool validateCommand(const Command& cmd) override;
 };

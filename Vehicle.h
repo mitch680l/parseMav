@@ -3,11 +3,27 @@
 #include <memory>
 #include "Command.h"
 #include <set>
+#include "mavlink_usart.h"
+#include <cmath>
+#include <iostream>
 
 class Vehicle {
-public:
-    virtual ~Vehicle() = default;
-    virtual std::string getName() const = 0;
-    virtual void executeCommand(const Command& cmd) = 0;
-    virtual bool validateCommand(const Command& cmd) const = 0;
-};
+    public:
+        virtual ~Vehicle();
+        virtual std::string getName() const = 0;
+    
+        virtual bool validateCommand(const Command& cmd);
+    
+        virtual bool validateStop();
+        virtual bool validateStart();
+        virtual bool validateMove(const std::vector<std::string>& args);
+        virtual bool validatePan(const std::vector<std::string>& args);
+        virtual bool validateTilt(const std::vector<std::string>& args);
+        virtual bool validateEngine(const std::vector<std::string>& args);
+    
+        virtual void executeStop() = 0;
+        virtual void executeStart() = 0;
+        virtual void executeMove(const std::string& dir) = 0;
+        virtual void executePan(float deg) = 0;
+        virtual void executeTilt(float deg) = 0;
+    };

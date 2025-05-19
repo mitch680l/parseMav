@@ -4,10 +4,16 @@
 
 class Rover : public Vehicle {
 public:
-    std::string getName() const override { return "Rover"; }
-    void executeCommand(const Command& cmd) override;
-    bool validateCommand(const Command& cmd) const override;
+    Rover();
+    ~Rover() override;
+    std::string getName() const override;
+private:
+
+    // Action-specific executors
+    void executeStop() override;
+    void executeStart() override;
+    void executeMove(const std::string& dir) override;
+    void executePan(float deg) override;
+    void executeTilt(float deg) override;
 
 };
-
-

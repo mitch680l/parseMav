@@ -15,7 +15,7 @@ void speak(const std::vector<std::string>& words, const std::string& fifoPath) {
     for (const auto& word : words) {
         pipe << word << " ";
         pipe.flush();
-        std::this_thread::sleep_for(std::chrono::milliseconds(400)); 
+        std::this_thread::sleep_for(std::chrono::milliseconds(100)); 
     }
 
     pipe << std::endl;
