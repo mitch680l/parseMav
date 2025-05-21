@@ -5,5 +5,11 @@
 class Copter : public Vehicle {
 public:
     std::string getName() const override { return "Copter"; }
-    bool validateCommand(const Command& cmd)  override;
+    void executeStop() override;
+    void executeStart() override;
+    void executeMove(const std::string& dir) override;
+    void executePan(float deg) override;
+    void executeTilt(float deg) override;
+    void executeTurn(float yaw, int direction, bool relative) override;
+    void executeAdvance(float lat, float lng, float alt) override;
 };

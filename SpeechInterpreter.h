@@ -169,7 +169,7 @@ private:
             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
                 now - actionStartTime
             ).count();
-            if (elapsed >= 5) {
+            if (elapsed >= 2) {
                 finishAction();
             }
         }

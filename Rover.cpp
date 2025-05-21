@@ -2,7 +2,7 @@
 #include <iostream>
 #include <cmath>
 #include <set>
-#include "helper.h"
+
 
 Rover::Rover() = default;
 Rover::~Rover() = default;
@@ -32,6 +32,14 @@ void Rover::executeTilt(float angleDeg) {
     SendServo(7,pwm);
 }
 
+void Rover::executeTurn(float yaw, int direction, bool relative) {
+    appendTurn(yaw,30.0f, direction, relative);
+    std::cout << "Executing turn: yaw " << yaw << "° direction " << (direction == 1 ? "right" : "left") << (relative ? " (relative)" : "") << "\n";
+}
+void Rover::executeAdvance(float lat, float lng, float alt) {
+    appendWaypoint(lat, lng, alt);
+    std::cout << "Executing advance: moving to lat " << lat << ", lng " << lng << ", alt " << alt << "\n";
+}
 std::string Rover::getName() const {
     return "Rover";
   }
