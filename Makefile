@@ -1,72 +1,71 @@
-# Makefile
-
 CXX       = g++
 CXXFLAGS  = -std=c++17 -Wall -Wno-address-of-packed-member
-INCLUDES  = -I/path/to/mavlink/include
+INCLUDES  = -Iinc -I/path/to/mavlink/include
 
-OBJS      = main.o mavlink_usart.o Rover.o Plane.o Copter.o Command.o Vehicle.o helper.o reader_lib.o
+SRCDIR    = src
+INCDIR    = inc
+BINDIR    = bin
+OBJDIR    = bin
 
+# Source files grouped by target
+SRC_COMMON       = $(SRCDIR)/mavlink_usart.cpp \
+                   $(SRCDIR)/helper.cpp \
+                   $(SRCDIR)/reader_lib.cpp
+SRC_INTERPRETER  = $(SRCDIR)/main.cpp \
+                   $(SRCDIR)/Vehicle.cpp \
+                   $(SRCDIR)/Command.cpp \
+                   $(SRCDIR)/Rover.cpp \
+                   $(SRCDIR)/Plane.cpp \
+                   $(SRCDIR)/Copter.cpp
+SRC_SPEAKER      = $(SRCDIR)/Speaker.cpp
+SRC_TEST_MAV     = $(SRCDIR)/test_mav.cpp $(SRC_COMMON)
+SRC_READER       = $(SRCDIR)/reader_main.cpp $(SRC_COMMON)
+SRC_CONSUMER     = $(SRCDIR)/consumer.cpp $(SRC_COMMON)
+
+# Object files in OBJDIR
+OBJ_COMMON       = $(SRC_COMMON:$(SRCDIR)/%.cpp=$(OBJDIR)/%.o)
+OBJ_INTERPRETER  = $(SRC_INTERPRETER:$(SRCDIR)/%.cpp=$(OBJDIR)/%.o)
+OBJ_SPEAKER      = $(SRC_SPEAKER:$(SRCDIR)/%.cpp=$(OBJDIR)/%.o)
+OBJ_TEST_MAV     = $(SRC_TEST_MAV:$(SRCDIR)/%.cpp=$(OBJDIR)/%.o)
+OBJ_READER       = $(SRC_READER:$(SRCDIR)/%.cpp=$(OBJDIR)/%.o)
+OBJ_CONSUMER     = $(SRC_CONSUMER:$(SRCDIR)/%.cpp=$(OBJDIR)/%.o)
+
+.PHONY: all clean test interpreter speaker test_mav reader consumer
 all: interpreter speaker test_mav reader consumer
 
-interpreter: $(OBJS)
-	$(CXX) $(CXXFLAGS) -o interpreter $(OBJS)
+test: test_mav
+	./$(BINDIR)/test_mav
 
-Vehicle.o: Vehicle.cpp Vehicle.h
-	$(CXX) $(CXXFLAGS) -c Vehicle.cpp
+# Aliases to bin targets
+interpreter: $(BINDIR)/interpreter
+speaker:    $(BINDIR)/speaker
+test_mav:   $(BINDIR)/test_mav
+reader:     $(BINDIR)/reader
+consumer:   $(BINDIR)/consumer
 
-test_mav.o: test_mav.cpp
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c test_mav.cpp
+# Ensure directories exist
+$(BINDIR):
+	mkdir -p $(BINDIR)
 
-test_mav: test_mav.o mavlink_usart.o
-	$(CXX) $(CXXFLAGS) -o test_mav test_mav.o mavlink_usart.o helper.o reader_lib.o
+# Link rules to bin/
+$(BINDIR)/interpreter: $(OBJ_INTERPRETER) $(OBJ_COMMON) | $(BINDIR)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $^
 
-helper.o: helper.cpp helper.h
-	$(CXX) $(CXXFLAGS) -c helper.cpp
+$(BINDIR)/speaker: $(OBJ_SPEAKER) | $(BINDIR)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $^
 
-main.o: main.cpp SpeechInterpreter.h
-	$(CXX) $(CXXFLAGS) -c main.cpp
+$(BINDIR)/test_mav: $(OBJ_TEST_MAV) | $(BINDIR)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $^
 
-Command.o: Command.cpp Command.h
-	$(CXX) $(CXXFLAGS) -c Command.cpp
+$(BINDIR)/reader: $(OBJ_READER) | $(BINDIR)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -pthread -o $@ $^
 
-mavlink_usart.o: mavlink_usart.cpp mavlink_usart.h
-	$(CXX) $(CXXFLAGS) -c mavlink_usart.cpp
+$(BINDIR)/consumer: $(OBJ_CONSUMER) | $(BINDIR)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -pthread -o $@ $^
 
-Rover.o: Rover.cpp Rover.h
-	$(CXX) $(CXXFLAGS) -c Rover.cpp
-
-Plane.o: Plane.cpp Plane.h
-	$(CXX) $(CXXFLAGS) -c Plane.cpp
-
-Copter.o: Copter.cpp Copter.h
-	$(CXX) $(CXXFLAGS) -c Copter.cpp
-
-Speaker.o: Speaker.cpp
-	$(CXX) $(CXXFLAGS) -c Speaker.cpp
-
-speaker: Speaker.o
-	$(CXX) $(CXXFLAGS) -o speaker Speaker.o
-
-
-reader: reader_main.o reader_lib.o mavlink_usart.o
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -pthread -o reader reader_main.o reader_lib.o mavlink_usart.o
-
-consumer: consumer.o reader_lib.o mavlink_usart.o
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -pthread -o consumer consumer.o reader_lib.o mavlink_usart.o
-
-
-reader_main.o: reader_main.cpp reader.h
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c reader_main.cpp
-
-reader_lib.o: reader_lib.cpp reader.h
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c reader_lib.cpp
-
-consumer.o: consumer.cpp reader.h
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c consumer.cpp
-
-.PHONY: test
-test: test_heartbeat
-	./test_heartbeat
+# Pattern rule for building object files into OBJDIR
+$(OBJDIR)/%.o: $(SRCDIR)/%.cpp | $(OBJDIR)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
 clean:
-	rm -f *.o interpreter speaker test_mav mavlink_uart.o
+	rm -rf $(OBJDIR)
