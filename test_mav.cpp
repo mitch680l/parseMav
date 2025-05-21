@@ -1,16 +1,17 @@
 #include <iostream>
 #include <thread>
 #include <chrono>
-
+#include "reader.h"
 #include "mavlink_usart.h"
 
 int main() {
-    if (init_uart() != 0) {
-        std::cerr << "Failed to initialize UART" << std::endl;
+    if (!open_ipc()) {
+        std::cerr << "Error: failed to open shared memory\n";
         return 1;
     }
-    else {
-        std::cout << "UART opened OK" << std::endl;
+    if (!init_cmd_uart()) {
+        std::cerr << "Error: failed to open UART\n";
+        return 2;
     }
 
     double lat1 = 38.972387;

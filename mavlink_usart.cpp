@@ -29,100 +29,10 @@ void Send(int fd, const uint8_t *buf, size_t len) {
     if (fd < 0) {
         std::cerr << "[ERROR] Send: invalid file descriptor\n";
         return;}
-    //std::lock_guard<std::mutex> lock(send_mutex);
+
     write(fd, buf, len);
 }
 
-
-
-/*
-void Read(int uart_fd, uint8_t *buf, size_t len) {
-    if (uart_fd < 0) return;
-    read(uart_fd, buf, len);
-}
-*/
-
-/*
-int init_uart(void) {
-    const char *device = "/dev/serial0";
-    uart_fd = open(device, O_RDWR | O_NOCTTY | O_SYNC);
-    if (uart_fd < 0) {
-        perror("open serial");
-        return -1;
-    }
-    struct termios tty;
-    if (tcgetattr(uart_fd, &tty) != 0) {
-        perror("tcgetattr");
-        close(uart_fd);
-        return -1;
-    }
-    cfsetospeed(&tty, B115200);
-    cfsetispeed(&tty, B115200);
-    tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;
-    tty.c_iflag &= ~IGNBRK;
-    tty.c_lflag = 0;
-    tty.c_oflag = 0;
-    tty.c_cc[VMIN]  = 0;
-    tty.c_cc[VTIME] = 5;
-    tty.c_iflag &= ~(IXON | IXOFF | IXANY);
-    tty.c_cflag |= (CLOCAL | CREAD);
-    tty.c_cflag &= ~(PARENB | PARODD);
-    tty.c_cflag &= ~CSTOPB;
-    tty.c_cflag &= ~CRTSCTS;
-    if (tcsetattr(uart_fd, TCSANOW, &tty) != 0) {
-        perror("tcsetattr");
-        close(uart_fd);
-        return -1;
-    }
-    // Request GPS (POSITION) and attitude streams at 5 Hz
-    mavlink_message_t msg;
-    mavlink_msg_request_data_stream_pack(
-        SYSID, COMPID, &msg,
-        TARGET_SYS, TARGET_COMP,
-        MAV_DATA_STREAM_POSITION, 1, 1
-    );
-
-    uint8_t buf[MAVLINK_MAX_PACKET_LEN];
-    size_t len = mavlink_msg_to_send_buffer(buf, &msg);
-    Send(uart_fd, buf, len);
-    mavlink_msg_request_data_stream_pack(
-        SYSID, COMPID, &msg,
-        TARGET_SYS, TARGET_COMP,
-        MAV_DATA_STREAM_EXTRA1, 1, 1
-    );
-    len = mavlink_msg_to_send_buffer(buf, &msg);
-    Send(uart_fd, buf, len);
-    return 0;
-}
-*/
-/*
-void parseModeAck(const mavlink_message_t& msg) {
-    if (msg.msgid == MAVLINK_MSG_ID_COMMAND_ACK) {
-        mavlink_command_ack_t ack;
-        mavlink_msg_command_ack_decode(&msg, &ack);
-        if (ack.command == MAV_CMD_DO_SET_MODE) {
-            if (ack.result == MAV_RESULT_ACCEPTED)
-                std::cout << "[DEBUG] Mode change accepted\n";
-            else
-                std::cout << "[DEBUG] Mode change failed (" << ack.result << ")\n";
-        }
-    }
-}
-*/
-/*
-void parseThrottleAck(const mavlink_message_t& msg) {
-    if (msg.msgid == MAVLINK_MSG_ID_COMMAND_ACK) {
-        mavlink_command_ack_t ack;
-        mavlink_msg_command_ack_decode(&msg, &ack);
-        if (ack.command == MAV_CMD_DO_CHANGE_SPEED) {
-            if (ack.result == MAV_RESULT_ACCEPTED)
-                std::cout << "[DEBUG] Throttle change accepted\n";
-            else
-                std::cout << "[DEBUG] Throttle change failed (" << ack.result << ")\n";
-        }
-    }
-}
-*/
 void SendHeartbeat(void) {
     if (cmd_fd < 0) return;
 
@@ -165,7 +75,6 @@ void SendServo(uint8_t servo, uint16_t pwm) {
     Send(cmd_fd, buf, len);
 }
 
-// Append a GLOBAL_RELATIVE_ALT waypoint at seq = mission_seq
 void appendWaypoint(int32_t lat, int32_t lon, float alt) {
     mavlink_message_t msg;
     uint8_t        buf[MAVLINK_MAX_PACKET_LEN];
@@ -352,32 +261,4 @@ void throttle(int arm) {
     len = mavlink_msg_to_send_buffer(buf, &msg);
     Send(cmd_fd, buf, len);
 }
-
-/*
-void processIncoming() {
-    mavlink_message_t msg;
-    mavlink_status_t status;
-    uint8_t byte;
-    while (read(uart_fd, &byte, 1) > 0) {
-        if (mavlink_parse_char(MAVLINK_COMM_0, byte, &msg, &status)) {
-            // handle telemetry messages here if needed
-            switch (msg.msgid) {
-                case MAVLINK_MSG_ID_GLOBAL_POSITION_INT:
-                    // handle telemetry or discard
-                    break;
-                case MAVLINK_MSG_ID_ATTITUDE:
-                    // handle telemetry or discard
-                    break;
-                case MAVLINK_MSG_ID_COMMAND_ACK:
-                    // dispatch to parsers
-                    parseModeAck(msg);
-                    parseThrottleAck(msg);
-                    break;
-                default:
-                    break;
-            }
-        }
-    }
-}
-*/
 

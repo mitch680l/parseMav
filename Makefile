@@ -4,7 +4,7 @@ CXX       = g++
 CXXFLAGS  = -std=c++17 -Wall -Wno-address-of-packed-member
 INCLUDES  = -I/path/to/mavlink/include
 
-OBJS      = main.o mavlink_usart.o Rover.o Plane.o Copter.o Command.o Vehicle.o helper.o
+OBJS      = main.o mavlink_usart.o Rover.o Plane.o Copter.o Command.o Vehicle.o helper.o reader_lib.o
 
 all: interpreter speaker test_mav reader consumer
 
@@ -18,7 +18,7 @@ test_mav.o: test_mav.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c test_mav.cpp
 
 test_mav: test_mav.o mavlink_usart.o
-	$(CXX) $(CXXFLAGS) -o test_mav test_mav.o mavlink_usart.o helper.o
+	$(CXX) $(CXXFLAGS) -o test_mav test_mav.o mavlink_usart.o helper.o reader_lib.o
 
 helper.o: helper.cpp helper.h
 	$(CXX) $(CXXFLAGS) -c helper.cpp
@@ -48,16 +48,13 @@ speaker: Speaker.o
 	$(CXX) $(CXXFLAGS) -o speaker Speaker.o
 
 
-
-# reader daemon
 reader: reader_main.o reader_lib.o mavlink_usart.o
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -pthread -o reader reader_main.o reader_lib.o mavlink_usart.o
 
-# consumer application
 consumer: consumer.o reader_lib.o mavlink_usart.o
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -pthread -o consumer consumer.o reader_lib.o mavlink_usart.o
 
-# individual object rules
+
 reader_main.o: reader_main.cpp reader.h
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c reader_main.cpp
 
@@ -66,7 +63,7 @@ reader_lib.o: reader_lib.cpp reader.h
 
 consumer.o: consumer.cpp reader.h
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c consumer.cpp
-# Run tests
+
 .PHONY: test
 test: test_heartbeat
 	./test_heartbeat

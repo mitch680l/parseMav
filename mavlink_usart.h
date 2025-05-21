@@ -31,11 +31,7 @@ Wrapper for rpi write function
 */
 void Send(int fd, const uint8_t *buf, size_t len);
 //void Read(int uart_fd, uint8_t *buf, size_t len);
-/*
-Get current telemetry data from the autopilot *TODO*
-*/
-void getTelem(double *lat, double *lon, double *alt);
-void getBearing(double *bearing);
+
 /*
 Add a waypoint to the mission
 */
@@ -67,9 +63,7 @@ void throttle(int arm);
 bool setFlightMode(FlightMode fm);
 
 
-//void parseModeAck(const mavlink_message_t& msg);
-//void parseThrottleAck(const mavlink_message_t& msg);
-void processIncoming();
+
 
 
 
