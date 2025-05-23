@@ -19,7 +19,7 @@ int main() {
     double alt = 0;
     getTelem(&lat1, &lon1, &alt);
     std::cout << "Current position: " << lat1 << ", " << lon1 << ", " << alt << std::endl;
-    double distance = 56620;
+    double distance = 100000;
     double bearing = 90;
     getBearing(&bearing);
     std::cout << "Current bearing: " << bearing << std::endl;
@@ -27,18 +27,14 @@ int main() {
     double lat2, lon2;
     vincentyDirect(lat1, lon1, bearing, distance, lat2, lon2);
     std::cout << "Vincenty direct result: " << lat2 << ", " << lon2 << std::endl;
-
-    throttle(0);
-    std::cout << "Throttle disarmed" << std::endl;
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-    std::cout << "Processing incoming messages..." << std::endl;
-    void processIncoming();
+    SendHeartbeat();
+    throttle(1);
+    std::cout << "Throttle Armed" << std::endl;
+    setFlightMode(FlightMode::AUTO);
+    appendWaypoint(lat2,lon1,alt);
 
     int count = 0;
     while (count < 3) {
-        SendHeartbeat();
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-        std::cout << "Heartbeat sent" << std::endl;
         count++;
     }
     //throttle(0);

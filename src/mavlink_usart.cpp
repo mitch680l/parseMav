@@ -6,12 +6,12 @@
 #include <errno.h>
 #include <string.h>
 #include <iostream>
-
+#include <iomanip>
 #include <mutex>
-static std::mutex send_mutex;
-static uint16_t mission_seq = 0;
+#include <thread>
 
-int cmd_fd = -1; 
+
+
 bool init_cmd_uart(void) {
     // open the same TTY write-only; termios already configured by first open
     cmd_fd = open(UART_DEVICE, O_WRONLY | O_NOCTTY | O_SYNC);
@@ -26,11 +26,18 @@ bool init_cmd_uart(void) {
 }
 
 void Send(int fd, const uint8_t *buf, size_t len) {
-    if (fd < 0) {
-        std::cerr << "[ERROR] Send: invalid file descriptor\n";
-        return;}
-
-    write(fd, buf, len);
+    ssize_t n = write(fd, buf, len);
+    if (n < 0) {
+        perror("UART write failed");
+    } else if ((size_t)n != len) {
+        std::cerr << "[WARN] only wrote " << n << "/" << len << " bytes\n";
+    } else {
+        std::cerr << "[DEBUG] wrote " << n << " bytes:";
+        for (size_t i = 0; i < (size_t)n; ++i)
+            std::cerr << " " << std::hex << std::setw(2) << std::setfill('0')
+                      << (int)buf[i];
+        std::cerr << std::dec << "\n";
+    }
 }
 
 void SendHeartbeat(void) {
@@ -75,77 +82,6 @@ void SendServo(uint8_t servo, uint16_t pwm) {
     Send(cmd_fd, buf, len);
 }
 
-void appendWaypoint(int32_t lat, int32_t lon, float alt) {
-    mavlink_message_t msg;
-    uint8_t        buf[MAVLINK_MAX_PACKET_LEN];
-    size_t         len;
-
-    // 1) tell it we’re writing item [mission_seq..mission_seq]
-    mavlink_msg_mission_write_partial_list_pack(
-        SYSID, COMPID, &msg,
-        TARGET_SYS, TARGET_COMP,
-        mission_seq, mission_seq,
-        MAV_MISSION_TYPE_MISSION
-    );
-    len = mavlink_msg_to_send_buffer(buf, &msg);
-    Send(cmd_fd, buf, len);
-
-    // 2) send the mission item itself
-    mavlink_msg_mission_item_int_pack(
-        SYSID, COMPID, &msg,
-        TARGET_SYS,
-        TARGET_COMP,
-        mission_seq,                        // seq
-        MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,  // frame
-        MAV_CMD_NAV_WAYPOINT,               // command
-        0, 1,                               // current=0, autocontinue=1
-        0, 0, 0, 0,                         // params 1–4 unused here
-        lat, lon, alt,                      // x/y/z
-        MAV_MISSION_TYPE_MISSION
-    );
-    len = mavlink_msg_to_send_buffer(buf, &msg);
-    Send(cmd_fd, buf, len);
-
-
-    mission_seq++;
-}
-
-void appendTurn(float yaw_deg, float yaw_rate = 30.0f, int8_t direction = 1, bool relative = false) {
-    mavlink_message_t msg;
-    uint8_t        buf[MAVLINK_MAX_PACKET_LEN];
-    size_t         len;
-    uint8_t        rel_flag = relative ? 1 : 0;
-
-    mavlink_msg_mission_write_partial_list_pack(
-        SYSID, COMPID, &msg,
-        TARGET_SYS, TARGET_COMP,
-        mission_seq, mission_seq,
-        MAV_MISSION_TYPE_MISSION
-    );
-    len = mavlink_msg_to_send_buffer(buf, &msg);
-    Send(cmd_fd, buf, len);
-
-    mavlink_msg_mission_item_int_pack(
-        SYSID, COMPID, &msg,
-        TARGET_SYS,
-        TARGET_COMP,
-        mission_seq,           // seq
-        MAV_FRAME_MISSION,     // yaw has no lat/lon
-        MAV_CMD_CONDITION_YAW, // command
-        0, 1,                  // current=0, autocontinue=1
-        yaw_deg,               // param1 = heading (deg)
-        yaw_rate,              // param2 = yaw speed (deg/s)
-        direction,             // param3 = 1=CW, -1=CCW
-        rel_flag,              // param4 = relative? (1=yes)
-        0, 0, 0,               // x/y/z unused
-        MAV_MISSION_TYPE_MISSION
-    );
-    len = mavlink_msg_to_send_buffer(buf, &msg);
-    Send(cmd_fd, buf, len);
-
-    mission_seq++;
-}
-
 void clearMission() {
     mavlink_message_t msg;
     uint8_t        buf[MAVLINK_MAX_PACKET_LEN];
@@ -160,7 +96,10 @@ void clearMission() {
     len = mavlink_msg_to_send_buffer(buf, &msg);
     Send(cmd_fd, buf, len);
 
-    mission_seq = 0;
+    pthread_mutex_lock(&shm_ptr->mutex);
+    shm_ptr->seq = 0;
+    pthread_mutex_unlock(&shm_ptr->mutex);
+    
 }
 
 void startMission() {
@@ -179,36 +118,6 @@ void startMission() {
     Send(cmd_fd, buf, len);
 }
 
-void switchMode() {
-    mavlink_message_t msg;
-    uint8_t        buf[MAVLINK_MAX_PACKET_LEN];
-    size_t         len;
-    uint8_t  base_mode   = MAV_MODE_FLAG_CUSTOM_MODE_ENABLED | MAV_MODE_FLAG_SAFETY_ARMED;
-    uint32_t custom_mode = 3;
-
-    mavlink_msg_set_mode_pack(
-        SYSID, COMPID, &msg,
-        TARGET_SYS,
-        base_mode,
-        custom_mode
-    );
-    len = mavlink_msg_to_send_buffer(buf, &msg);
-    Send(cmd_fd, buf, len);
-}
-
-/*
-0	MAV_MODE_PREFLIGHT	System is not ready to fly, booting, calibrating, etc. No flag is set.
-64	MAV_MODE_MANUAL_DISARMED	System is allowed to be active, under manual (RC) control, no stabilization
-66	MAV_MODE_TEST_DISARMED	UNDEFINED mode. This solely depends on the autopilot - use with caution, intended for developers only.
-80	MAV_MODE_STABILIZE_DISARMED	System is allowed to be active, under assisted RC control.
-88	MAV_MODE_GUIDED_DISARMED	System is allowed to be active, under autonomous control, manual setpoint
-92	MAV_MODE_AUTO_DISARMED	System is allowed to be active, under autonomous control and navigation (the trajectory is decided onboard and not pre-programmed by waypoints)
-192	MAV_MODE_MANUAL_ARMED	System is allowed to be active, under manual (RC) control, no stabilization
-194	MAV_MODE_TEST_ARMED	UNDEFINED mode. This solely depends on the autopilot - use with caution, intended for developers only.
-208	MAV_MODE_STABILIZE_ARMED	System is allowed to be active, under assisted RC control.
-216	MAV_MODE_GUIDED_ARMED	System is allowed to be active, under autonomous control, manual setpoint
-220	MAV_MODE_AUTO_ARMED	System is allowed to be active, under autonomous control and navigation (the trajectory is decided onboard and not pre-programmed by waypoints)
-*/
 bool setFlightMode(FlightMode fm) {
     // 1) pick the right MAV_MODE_* define for param1
     uint8_t mav_mode = 0;
@@ -246,7 +155,6 @@ bool setFlightMode(FlightMode fm) {
     return true;
 }
 
-
 void throttle(int arm) {
     mavlink_message_t msg;
     uint8_t        buf[MAVLINK_MAX_PACKET_LEN];
@@ -260,5 +168,124 @@ void throttle(int arm) {
     );
     len = mavlink_msg_to_send_buffer(buf, &msg);
     Send(cmd_fd, buf, len);
+}
+
+
+// Queue a waypoint for upload
+void appendWaypoint(double lat, double lon, float alt) {
+    mavlink_message_t msg;
+    uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+    int32_t lat_fixed7 = static_cast<int32_t>(std::lround(lat * 1e7));
+    int32_t lon_fixed7 = static_cast<int32_t>(std::lround(lon * 1e7));
+
+    mavlink_msg_mission_item_int_pack(
+        SYSID, COMPID, &msg,
+        TARGET_SYS, TARGET_COMP,
+        missionPlan.size(),                // seq
+        MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+        MAV_CMD_NAV_WAYPOINT,
+        0, 1, 0,0,0,0,
+        lat_fixed7, lon_fixed7, alt,
+        MAV_MISSION_TYPE_MISSION
+    );
+    size_t len = mavlink_msg_to_send_buffer(buf, &msg);
+    missionPlan.push_back({ByteBuffer(buf, buf + len)});
+}
+
+// Queue a yaw-turn command for upload
+void appendTurn(float yaw_deg, float yaw_rate = 30.0f,
+                int8_t direction = 1, bool relative = false) {
+    mavlink_message_t msg;
+    uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+    uint8_t rel_flag = relative ? 1 : 0;
+
+    mavlink_msg_mission_item_int_pack(
+        SYSID, COMPID, &msg,
+        TARGET_SYS, TARGET_COMP,
+        missionPlan.size(),                // seq
+        MAV_FRAME_MISSION,
+        MAV_CMD_CONDITION_YAW,
+        0, 1,
+        yaw_deg, yaw_rate, direction, rel_flag,
+        0,0,0,
+        MAV_MISSION_TYPE_MISSION
+    );
+    size_t len = mavlink_msg_to_send_buffer(buf, &msg);
+    missionPlan.push_back({ByteBuffer(buf, buf + len)});
+}
+
+// FSM states for mission upload handshake
+
+
+// Send MISSION_COUNT and enter upload loop
+void startMissionUpload() {
+    // 1) Send total count
+    mavlink_message_t msg;
+    uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+     mavlink_msg_mission_count_pack(
+        SYSID, COMPID, &msg,
+        TARGET_SYS, TARGET_COMP,
+        missionPlan.size(),                     // total items
+        MAV_MISSION_TYPE_MISSION,               // mission type
+        0                                       // timeout (ms)
+    );
+    size_t len = mavlink_msg_to_send_buffer(buf, &msg);
+    Send(cmd_fd, buf, len);
+    std::cout << "[DEBUG] Sent MISSION_COUNT: " << missionPlan.size() << " items\n";
+
+    // 2) Enter FSM to handle requests
+    size_t nextIndex = 0;
+    MissionUploadState state = UP_RUNNING;
+
+    while (true) {
+        // Read shared state atomically
+        pthread_mutex_lock(&shm_ptr->mutex);
+        auto fsm = shm_ptr->missionState;
+        pthread_mutex_unlock(&shm_ptr->mutex);
+
+        if (fsm == NEXT && state == UP_RUNNING) {
+            // FC has requested next item
+            if (nextIndex < missionPlan.size()) {
+                Send(cmd_fd,
+                     missionPlan[nextIndex].buf.data(),
+                     missionPlan[nextIndex].buf.size());
+                std::cout << "[DEBUG] Sent mission item seq: " << nextIndex << "\n";
+                nextIndex++;
+                
+                pthread_mutex_lock(&shm_ptr->mutex);
+                if (nextIndex >= missionPlan.size()) {
+                    shm_ptr->missionState = COMPLETED;
+                } else {
+                    shm_ptr->missionState = RUNNING;
+                }
+                pthread_mutex_unlock(&shm_ptr->mutex);
+            }
+        }
+
+        if (fsm == COMPLETED) {
+            // Upload done
+            missionPlan.clear();
+            pthread_mutex_lock(&shm_ptr->mutex);
+            shm_ptr->missionState = IDLE;
+            pthread_mutex_unlock(&shm_ptr->mutex);
+            std::cout << "[DEBUG] Mission upload completed, state reset to IDLE\n";
+            break;
+        }
+
+        // Throttle loop
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+}
+
+// Send the requested mission item (called externally if needed)
+void sendMissionItem(size_t seq) {
+    if (seq >= missionPlan.size()) {
+        std::cerr << "[ERROR] Requested seq " << seq << " out of range\n";
+        return;
+    }
+    Send(cmd_fd,
+         missionPlan[seq].buf.data(),
+         missionPlan[seq].buf.size());
+    std::cout << "[DEBUG] Sent mission item seq: " << seq << "\n";
 }
 
