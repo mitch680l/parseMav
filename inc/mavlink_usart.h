@@ -15,45 +15,21 @@ It also sets up a UART connection to the autopilot that allows for sending only.
 
 //Standard tx/rx implmentation for rpi(9600 baud for now).
 //int init_uart(void);
-extern int cmd_fd;
 
-/*
-These are the states for the mission upload handshake process.
-*To-do: make this more clear and robust. Its a bit of a mess right now.
-ExecState is the state of the mission execution(autopilot side/reader).
-UploadState is the state of the mission upload(writer side).
-*/
-enum MissionExecState {
-    IDLE = 0,
-    RUNNING,
-    NEXT,
-    COMPLETED
-};
-enum MissionUploadState { UP_IDLE, UP_RUNNING, UP_NEXT, UP_COMPLETED };
 
-/*
-This is the shared memory structure that is used to share data between the reader and the main program.
-*/
-struct SharedTelem {
-    pthread_mutex_t   mutex;
-    double            lat, lon, alt;
-    double            yaw_deg;
-    uint64_t          seq;            
-    MissionExecState  missionState;   
-    uint32_t          missionCount;   
-};
 
-//uart file descriptor/os resource
-int cmd_fd = -1; 
-//shared memory file descriptor(call open_ipc() to to allocate this pointer).
-static SharedTelem* shm_ptr = nullptr;
 
-//Mission plan vector
-typedef std::vector<uint8_t> ByteBuffer;
+//Mission plan item
 struct MissionItem {
-    ByteBuffer buf;
+        mavlink_mission_item_int_t msg;
 };
-static std::vector<MissionItem> missionPlan;
+
+struct Waypoint {
+    double lat;
+    double lon;
+    double alt;
+};
+
 
 
 
@@ -87,11 +63,6 @@ clear the missions from autopilot
 void clearMission();
 
 /*
-start the mission(only for plane)
-*/
-void startMission();
-
-/*
 arm/disarm the vehicle(maybe rename this to arm?)
 */
 void throttle(int arm);
@@ -104,25 +75,25 @@ bool setFlightMode(FlightMode fm);
 /*
 Add a waypoint to the mission queue.
 */
-void appendWaypoint(double lat, double lon, float alt);
+void appendWaypoint(double lat, double lon, float alt, std::vector<MissionItem>& missionPlan);
 
 /*
 Add a turn to the mission queue
 */
-void appendTurn(float yaw_deg, float yaw_rate = 30.0f, int8_t direction = 1, bool relative = false);
+void appendTurn(float yaw_deg, float yaw_rate, int8_t direction, bool relative, std::vector<MissionItem>& missionPlan);
 
 /*
 begin the mission upload process.
 */
-void startMissionUpload();
+void startMissionUpload(std::vector<MissionItem>& missionPlan);
 
+int getMissionSize(std::vector<MissionItem>& missionPlan);
+void setMissionCurrent(uint16_t seq);
 
-/*
-Send an individual mission item to the autopilot.(when its ready)
-*/
-void sendMissionItem(size_t seq);
-
-
+void sendMissionStartCommand();
+void sendMissionStopCommand();
+void sendMissionResumeCommand();
+void sendMissionPauseCommand();
 
 #ifdef __cplusplus
 }

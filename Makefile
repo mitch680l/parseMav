@@ -1,6 +1,6 @@
 CXX       = g++
 CXXFLAGS  = -std=c++17 -Wall -Wno-address-of-packed-member
-INCLUDES  = -Iinc -I/path/to/mavlink/include
+INCLUDES  = -Iinc -IparseMav/inc
 
 SRCDIR    = src
 INCDIR    = inc

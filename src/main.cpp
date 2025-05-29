@@ -9,15 +9,8 @@
 #include <chrono>
 #include <iomanip>
 int main() {
-    if (!open_ipc()) {
-        std::cerr << "Error: failed to open shared memory\n";
-        return 1;
-    }
-    if (!init_cmd_uart()) {
-        std::cerr << "Error: failed to open UART\n";
-        return 2;
-    }
-    SpeechInterpreter interpreter("/tmp/speech_pipe");
-    interpreter.run();
+    SpeechInterpreter alphaRover(VEHICLE_TYPE, VEHICLE_NAME, FIFO_PATH, ACTIONS_FILE, INPUT_TIMEOUT);
+    alphaRover.run();
+
     return 0;
 }

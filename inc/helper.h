@@ -20,4 +20,3 @@ double vincenty(double lat1_deg, double lon1_deg, double lat2_deg, double lon2_d
 //calculate destination point given start point, bearing and distance using Vincenty formula
 void vincentyDirect(double lat1_deg, double lon1_deg, double bearing_deg, double distance_m,double &lat2_deg, double &lon2_deg);
 //read waypoints.csv to match name
-bool getWaypointCoords(const std::string& name,double* lat, double* lon, double* alt);

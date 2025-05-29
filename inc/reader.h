@@ -11,11 +11,10 @@ bool create_ipc();
 bool open_ipc();            
 int  init_uart();          
 void readerLoop();         
-void parseThrottleAck(const mavlink_message_t& msg);
-void parseModeAck(const mavlink_message_t& msg);
+
 
 void getTelem(double* lat, double* lon, double* alt);
 void getBearing(double* bearing);
+void setCurrent(int current);
 
-void requestStreams();
 #endif 

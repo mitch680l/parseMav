@@ -151,34 +151,3 @@ void vincentyDirect(double lat1_deg, double lon1_deg, double bearing_deg, double
     lon2_deg = rad2deg(lon2);
 }
 
-bool getWaypointCoords(const std::string& name,double* lat, double* lon, double* alt) {
-    std::ifstream file(WAYPOINTS_FILE);
-    if (!file.is_open()) {
-        std::cout << "Error: could not open waypoints.csv\n";
-        return false;
-    }
-    std::string line;
-    while (std::getline(file, line)) {
-        std::stringstream ss(line);
-        std::string token;
-        std::vector<std::string> cols;
-    while (std::getline(ss, token, ',')) {
-        cols.push_back(token);
-    }
-    if (cols.size() < 4) continue;
-    if (cols[0] == name) {
-        try {
-            *lon = std::stod(cols[1]);
-            *lat = std::stod(cols[2]);
-            *alt = std::stod(cols[3]);
-            return true;
-        } 
-        catch (...) {
-            std::cout << "Error: invalid numeric data in waypoints.csv for " << name << "\n";
-            return false;
-        }
-    }
-    }
-    std::cout << "Error: waypoint '" << name << "' not found in waypoints.csv\n";
-    return false;
-}

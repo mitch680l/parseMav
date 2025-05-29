@@ -12,12 +12,15 @@ Example: <"move", ["forward", "10"]>
 
 class Command {
     std::string action;
+    std::vector<std::string> preActionArgs;
     std::vector<std::string> args;
+   
     
 
 public:
-    Command(std::string a, std::vector<std::string> argList) : action(std::move(a)), args(std::move(argList)) {}
+    Command(std::string a, std::vector<std::string> preArgList,std::vector<std::string> argList) : action(std::move(a)), preActionArgs(std::move(preArgList)),args(std::move(argList)) {}
     std::string getAction() const { return action; }
     const std::vector<std::string>& getArgs() const { return args; }
+    const std::vector<std::string>& getPreActionArgs() const { return preActionArgs; }
     void printArgs() const;
 };

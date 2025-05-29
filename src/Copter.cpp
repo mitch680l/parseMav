@@ -21,8 +21,8 @@ void Copter::executeStart() {
     std::cout << "Copter starting\n";
 }
 
-void Copter::executeMove(const std::string& dir) {
-    std::cout << "Copter move " << dir << "\n";
+void Copter::executeMove(std::vector<Waypoint> waypoints) {
+    std::cout << "Copter move " << "\n";
 }
 
 void Copter::executePan(float deg) {
@@ -31,4 +31,16 @@ void Copter::executePan(float deg) {
 
 void Copter::executeTilt(float deg) {
     std::cout << "Copter tilt " << deg << "\n";
+}
+
+void Copter::executeMission(std::string missionCommand) {
+    std::cout << "Copter executing mission command: " << missionCommand << "\n";
+}
+
+void Copter::executeEngine(const std::string& command) {
+    std::cout << "Copter executing engine command: " << command << "\n";
+}
+
+void Copter::executeArm(std::string command) {
+    std::cout << "Copter executing arm action: " << command << "\n";
 }

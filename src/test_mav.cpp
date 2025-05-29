@@ -13,26 +13,46 @@ int main() {
         std::cerr << "Error: failed to open UART\n";
         return 2;
     }
-
+    
+    std::vector<MissionItem> missionPlan;
     double lat1 = 38.972387;
     double lon1 = -95.233159;
     double alt = 0;
     getTelem(&lat1, &lon1, &alt);
     std::cout << "Current position: " << lat1 << ", " << lon1 << ", " << alt << std::endl;
-    double distance = 100000;
+    double distance = 5000;
     double bearing = 90;
     getBearing(&bearing);
     std::cout << "Current bearing: " << bearing << std::endl;
 
     double lat2, lon2;
     vincentyDirect(lat1, lon1, bearing, distance, lat2, lon2);
-    std::cout << "Vincenty direct result: " << lat2 << ", " << lon2 << std::endl;
-    SendHeartbeat();
+    std::cout << "Vincenty direct result1: " << lat2 << ", " << lon2 << std::endl;
+    //clearMission();
+    appendWaypoint(lat2,lon2,alt, missionPlan);
+    double distance2 = 5000;
+    double bearing2 = 180;
+    vincentyDirect(lat1, lon1, bearing2, distance2, lat2, lon2);
+    appendWaypoint(lat2,lon2,alt, missionPlan);
+    distance2 = 50000;
+    bearing2 = 90;
+    vincentyDirect(lat1, lon1, bearing2, distance2, lat2, lon2);
+    appendWaypoint(lat2,lon2,alt, missionPlan);
+    
     throttle(1);
     std::cout << "Throttle Armed" << std::endl;
     setFlightMode(FlightMode::AUTO);
-    appendWaypoint(lat2,lon1,alt);
+    std::cout << "Flight mode set to AUTO" << std::endl;
+    std::cout << getMissionSize(missionPlan) << " waypoints in the mission plan" << std::endl;
+    distance2 = 10000;
+    bearing2 = 270;
+    vincentyDirect(lat1, lon1, bearing2, distance2, lat2, lon2);
+    appendWaypoint(lat2,lon2,alt, missionPlan);
+    
 
+    std::cout << "Simulating mission Current = 1" << std::endl;
+    //setCurrent(1);
+    startMissionUpload(missionPlan);
     int count = 0;
     while (count < 3) {
         count++;

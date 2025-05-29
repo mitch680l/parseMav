@@ -8,18 +8,27 @@ Rover::Rover() = default;
 Rover::~Rover() = default;
 
 void Rover::executeStop() {
-    std::cout << "Executing stop: idle throttle, full brake, neutral gear, ignition ON\n";
+    std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
+    engineOn = false;
+    std::cout << "Executing stop: idle throttle, full brake, neutral gear, ignition OFF\n";
 }
 
 void Rover::executeStart() {
+    std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
+    engineOn = true;
     std::cout << "Executing start: ignition ON, system ready\n";
 }
 
-void Rover::executeMove(const std::string& direction) {
-    std::cout << "Executing move: " << direction << "\n";
+void Rover::executeMove(std::vector<Waypoint> waypoints) {
+    std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
+    for (const auto& wp : waypoints) {
+        appendWaypoint(wp.lat, wp.lon, wp.alt, missionPlan);
+    }
+    std::cout << "Executing move: added " << waypoints.size() << " waypoints to mission plan\n";
 }
 
 void Rover::executePan(float angleDeg) {
+    std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
     int pwm = angleToPwm(angleDeg);
     std::cout << "Executing pan to " << angleDeg << "° -> PWM " << pwm << "\n";\
     SendServo(6,pwm);
@@ -27,19 +36,66 @@ void Rover::executePan(float angleDeg) {
 }
 
 void Rover::executeTilt(float angleDeg) {
+    std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
     int pwm = angleToPwm(angleDeg);
     std::cout << "Executing tilt to " << angleDeg << "° -> PWM " << pwm << "\n";
     SendServo(7,pwm);
 }
 
 void Rover::executeTurn(float yaw, int direction, bool relative) {
-    appendTurn(yaw,30.0f, direction, relative);
+    std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
+    appendTurn(yaw,30.0f, direction, relative, missionPlan);
     std::cout << "Executing turn: yaw " << yaw << "° direction " << (direction == 1 ? "right" : "left") << (relative ? " (relative)" : "") << "\n";
 }
 void Rover::executeAdvance(float lat, float lng, float alt) {
-    appendWaypoint(lat, lng, alt);
+    std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
+    appendWaypoint(lat, lng, alt, missionPlan);
     std::cout << "Executing advance: moving to lat " << lat << ", lng " << lng << ", alt " << alt << "\n";
 }
 std::string Rover::getName() const {
     return "Rover";
   }
+
+void Rover::executeMission(std::string missionCommand) {
+    if (missionCommand == "start") {
+        sendMissionStartCommand();
+    } else if (missionCommand == "stop") {
+        sendMissionStopCommand();
+    } else if (missionCommand == "pause") {
+        sendMissionPauseCommand();
+    } else if (missionCommand == "resume") {
+        sendMissionResumeCommand();
+    } else if (missionCommand == "details") {
+        showMissionDetails();
+    } else {
+        std::cout << "Error: Unknown mission command " << missionCommand << "'\n";
+    }
+}
+
+void Rover::executeEngine(const std::string& command) {
+    std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
+    if (command == "start") {
+        engineOn = true;
+        std::cout << "Executing engine command: ON\n";
+    } else if (command == "stop") {
+        engineOn = false;
+        std::cout << "Executing engine command: OFF\n";
+    } else {
+        std::cout << "Error: Unknown engine command '" << command << "'\n";
+    }
+}
+
+void Rover::executeArm(std::string command) {
+    std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
+    if (command == "arm") {
+        throttle(1);
+        armState = true;
+        std::cout << "Executing arm command: armed\n";
+    } else if (command == "disarm") {
+        throttle(0);
+        armState = false;
+        std::cout << "Executing disarm command: disarmed\n";
+    } else {
+        std::cout << "Error: Unknown arm command '" << command << "'\n";
+    }
+}
