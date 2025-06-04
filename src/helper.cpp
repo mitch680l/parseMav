@@ -1,7 +1,6 @@
 #include "helper.h"
-int angleToPwm(float angleDeg) {
-    float norm = (angleDeg + 90.0f) / 180.0f; // map [-90,90] to [0,1]
-    return static_cast<int>(1000 + norm * 1000);
+int angleToPwm(float angleDeg, double modifier) {
+    return static_cast<int>(PWM_MIN + modifier * angleDeg);
 }
 
 
@@ -151,3 +150,30 @@ void vincentyDirect(double lat1_deg, double lon1_deg, double bearing_deg, double
     lon2_deg = rad2deg(lon2);
 }
 
+std::string getMissionStateName(int num) {
+    switch(num) {
+        case 0:
+        return "FINISHED";
+        break;
+
+        case 1:
+        return "RUNNING";
+        break;
+
+        case 2:
+        return "PAUSED";
+        break;
+
+        case 3:
+        return "ABORTED";
+        break;
+
+        case 4:
+        return "IDLE";
+        break;
+
+        default:
+        return "UNKNOWN";
+        break;
+    }
+}

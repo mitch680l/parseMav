@@ -17,7 +17,7 @@ It also sets up a UART connection to the autopilot that allows for sending only.
 //int init_uart(void);
 
 
-
+extern int cmd_fd;
 
 //Mission plan item
 struct MissionItem {
@@ -70,7 +70,7 @@ void throttle(int arm);
 /*
 Set mode of the vehicle
 */
-bool setFlightMode(FlightMode fm);
+bool setFlightMode(int mode);
 
 /*
 Add a waypoint to the mission queue.

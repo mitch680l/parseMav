@@ -25,32 +25,7 @@
 
 
 
-/**
- * SpeechInterpreter - Single-vehicle speech command interpreter
- * 
- * This interpreter is designed to run on each individual vehicle, listening to a shared
- * communication channel for commands directed to this specific vehicle.
- * 
- * It responds to three types of addressing (based on configuration):
- * 1. Specific callsign: "rover 67 move forward" or "delta 284 turn left"
- * 2. Vehicle type: "rover turn left" 
- * 3. Global commands: "all stop" or "global land"
- * 
- * Multi-word callsigns are supported (e.g., "rover 67", "delta 284", "alpha bravo").
- * Each addressing mode can be enabled/disabled via configuration defines.
- * 
- * Configuration options:
- * - ENABLE_GLOBAL_KEYWORDS: Allow "all", "global" etc. addressing
- * - ENABLE_VEHICLE_TYPE_KEYWORDS: Allow vehicle type addressing
- * - ENABLE_CALLSIGN_KEYWORDS: Allow specific callsign addressing  
- * - REQUIRE_OVER: Require "over" keyword to complete commands (auto-reject without it)
- * 
- * Example scenarios:
- * - "rover 67 move forward 10 over" → Only vehicle with callsign "rover 67" responds
- * - "delta 284 emergency stop over" → Only vehicle with callsign "delta 284" responds
- * - "rover turn left over" → All rovers respond (if vehicle type addressing enabled)
- * - "all emergency stop over" → All vehicles respond (if global addressing enabled)
- */
+
 class SpeechInterpreter {
 public:
     /**
@@ -122,12 +97,24 @@ public:
         if (ENABLE_GLOBAL_KEYWORDS) {
             std::cout << "  - Global commands: 'all', 'global', 'everyone', 'everybody'" << std::endl;
         }
+        if (ENABLE_TOGGLE_MODE) {
+            std::cout << "  - Toggle mode: 'on/off' activation (currently " 
+                      << (m_toggleActivated ? "ON" : "OFF") << ")" << std::endl;
+        }
+        if (ENABLE_NO_ID_MODE) {
+            std::cout << "  - No-ID mode: Commands accepted without identification" << std::endl;
+        }
         if (REQUIRE_OVER) {
             std::cout << "  - Commands require 'over' keyword to execute" << std::endl;
         }
         
-        if (!ENABLE_CALLSIGN_KEYWORDS && !ENABLE_VEHICLE_TYPE_KEYWORDS && !ENABLE_GLOBAL_KEYWORDS) {
-            std::cout << "  - WARNING: All addressing modes disabled!" << std::endl;
+        // Check if any addressing mode is available
+        bool hasAddressingMode = ENABLE_CALLSIGN_KEYWORDS || ENABLE_VEHICLE_TYPE_KEYWORDS || 
+                                ENABLE_GLOBAL_KEYWORDS || ENABLE_NO_ID_MODE || 
+                                (ENABLE_TOGGLE_MODE && m_toggleActivated);
+        
+        if (!hasAddressingMode) {
+            std::cout << "  - WARNING: No addressing modes enabled or activated!" << std::endl;
         }
         
         return true;
@@ -168,7 +155,7 @@ public:
         }
         
         while (processOnce()) {
-            usleep(10000); // 10ms sleep
+            usleep(1000); // 10ms sleep
         }
     }
 
@@ -185,6 +172,9 @@ public:
         bool globalEnabled;
         bool vehicleTypeEnabled;
         bool callsignEnabled;
+        bool toggleModeEnabled;
+        bool noIdModeEnabled;
+        bool toggleActivated;
         bool requireOver;
     };
     
@@ -199,6 +189,9 @@ public:
             ENABLE_GLOBAL_KEYWORDS,
             ENABLE_VEHICLE_TYPE_KEYWORDS,
             ENABLE_CALLSIGN_KEYWORDS,
+            ENABLE_TOGGLE_MODE,
+            ENABLE_NO_ID_MODE,
+            m_toggleActivated,
             REQUIRE_OVER
         };
     }
@@ -208,6 +201,24 @@ public:
      */
     std::vector<std::string> getValidActions() const {
         return std::vector<std::string>(m_validActions.begin(), m_validActions.end());
+    }
+
+    /**
+     * Manually set toggle state (for testing or external control)
+     */
+    void setToggleState(bool activated) {
+        if (ENABLE_TOGGLE_MODE) {
+            m_toggleActivated = activated;
+            std::cout << "[" << getCallsignString() << "] Toggle mode manually set to: " 
+                      << (activated ? "ON" : "OFF") << std::endl;
+        }
+    }
+
+    /**
+     * Get current toggle state
+     */
+    bool getToggleState() const {
+        return m_toggleActivated;
     }
 
 private:
@@ -244,9 +255,14 @@ private:
     // Multi-word callsign matching state
     size_t m_callsignMatchIndex = 0;  // Current position in callsign matching
     
+    // New toggle mode state
+    bool m_toggleActivated = false;  // Whether toggle mode is currently active
+    
     // Keywords
     static constexpr const char* END_KEYWORD = "over";
     static constexpr const char* CANCEL_KEYWORD = "cancel";
+    static constexpr const char* TOGGLE_ON_KEYWORD = "on";
+    static constexpr const char* TOGGLE_OFF_KEYWORD = "off";
     static const std::set<std::string> GLOBAL_KEYWORDS;
 
     /**
@@ -289,6 +305,8 @@ private:
         std::cout << "  - Callsign addressing: " << (ENABLE_CALLSIGN_KEYWORDS ? "ENABLED" : "DISABLED") << std::endl;
         std::cout << "  - Vehicle type addressing: " << (ENABLE_VEHICLE_TYPE_KEYWORDS ? "ENABLED" : "DISABLED") << std::endl;
         std::cout << "  - Global addressing: " << (ENABLE_GLOBAL_KEYWORDS ? "ENABLED" : "DISABLED") << std::endl;
+        std::cout << "  - Toggle mode: " << (ENABLE_TOGGLE_MODE ? "ENABLED" : "DISABLED") << std::endl;
+        std::cout << "  - No-ID mode: " << (ENABLE_NO_ID_MODE ? "ENABLED" : "DISABLED") << std::endl;
         std::cout << "  - Require 'over' keyword: " << (REQUIRE_OVER ? "ENABLED" : "DISABLED") << std::endl;
     }
 
@@ -475,6 +493,24 @@ private:
      * Handle token when waiting for address (callsign/vehicle type/global)
      */
     void handleAddressToken(const std::string& token) {
+        // If No-ID mode is enabled, try to handle as action directly
+        if (ENABLE_NO_ID_MODE) {
+            if (m_validActions.find(token) != m_validActions.end()) {
+                std::cout << "[" << getCallsignString() << "] No-ID mode: Direct action" << std::endl;
+                startAction(token);
+                return;
+            }
+        }
+        
+        // If toggle mode is enabled and activated, try to handle as action directly
+        if (ENABLE_TOGGLE_MODE && m_toggleActivated) {
+            if (m_validActions.find(token) != m_validActions.end()) {
+                std::cout << "[" << getCallsignString() << "] Toggle mode active: Direct action" << std::endl;
+                startAction(token);
+                return;
+            }
+        }
+        
         // Try callsign matching first (if enabled)
         if (ENABLE_CALLSIGN_KEYWORDS && tryMatchCallsign(token)) {
             if (m_callsignMatchIndex >= m_callsignTokens.size()) {
@@ -537,6 +573,21 @@ private:
      * Handle token when waiting for action
      */
     void handleActionToken(const std::string& token) {
+        // Check for toggle mode commands first (if enabled)
+        if (ENABLE_TOGGLE_MODE) {
+            if (token == TOGGLE_ON_KEYWORD) {
+                m_toggleActivated = true;
+                std::cout << "[" << getCallsignString() << "] Toggle mode activated" << std::endl;
+                resetToWaitingState();
+                return;
+            } else if (token == TOGGLE_OFF_KEYWORD) {
+                m_toggleActivated = false;
+                std::cout << "[" << getCallsignString() << "] Toggle mode deactivated" << std::endl;
+                resetToWaitingState();
+                return;
+            }
+        }
+        
         // Check if this is a valid action
         if (m_validActions.find(token) != m_validActions.end()) {
             startAction(token);

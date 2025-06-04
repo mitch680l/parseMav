@@ -2,8 +2,6 @@
 #include <iostream>
 #include <thread>
 #include <chrono>
-#include "mavlink_usart.h"
-#include "reader.h"
 #include <iostream>
 #include <thread>
 #include <chrono>

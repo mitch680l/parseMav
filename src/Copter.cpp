@@ -44,3 +44,7 @@ void Copter::executeEngine(const std::string& command) {
 void Copter::executeArm(std::string command) {
     std::cout << "Copter executing arm action: " << command << "\n";
 }
+
+void Copter::executeMode(const std::string& mode, const std::string& type) {
+    std::cout << "Copter executing mode change to: " << mode << " of type: " << type << "\n";
+}

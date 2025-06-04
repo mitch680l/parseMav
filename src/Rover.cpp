@@ -9,13 +9,13 @@ Rover::~Rover() = default;
 
 void Rover::executeStop() {
     std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
-    engineOn = false;
+    engine = false;
     std::cout << "Executing stop: idle throttle, full brake, neutral gear, ignition OFF\n";
 }
 
 void Rover::executeStart() {
     std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
-    engineOn = true;
+    engine = true;
     std::cout << "Executing start: ignition ON, system ready\n";
 }
 
@@ -29,17 +29,17 @@ void Rover::executeMove(std::vector<Waypoint> waypoints) {
 
 void Rover::executePan(float angleDeg) {
     std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
-    int pwm = angleToPwm(angleDeg);
-    std::cout << "Executing pan to " << angleDeg << "° -> PWM " << pwm << "\n";\
-    SendServo(6,pwm);
+    int pwm = angleToPwm(angleDeg, modifier_pan);
+    std::cout << "Executing pan to " << angleDeg << "° -> PWM " << pwm << "\n";
+    SendServo(PAN_CHANNEL,pwm);
 
 }
 
 void Rover::executeTilt(float angleDeg) {
     std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
-    int pwm = angleToPwm(angleDeg);
+    int pwm = angleToPwm(angleDeg, modifier_tilt);
     std::cout << "Executing tilt to " << angleDeg << "° -> PWM " << pwm << "\n";
-    SendServo(7,pwm);
+    SendServo(TILT_CHANNEL,pwm);
 }
 
 void Rover::executeTurn(float yaw, int direction, bool relative) {
@@ -67,7 +67,13 @@ void Rover::executeMission(std::string missionCommand) {
         sendMissionResumeCommand();
     } else if (missionCommand == "details") {
         showMissionDetails();
-    } else {
+    } else if (missionCommand == "clear") {
+        std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
+        missionPlan.clear(); //clear mission plan vector
+        std::cout << "Executing mission clear: cleared all waypoints and commands\n";
+        clearMission(); //clear autopilot
+    }
+    else {
         std::cout << "Error: Unknown mission command " << missionCommand << "'\n";
     }
 }
@@ -75,10 +81,10 @@ void Rover::executeMission(std::string missionCommand) {
 void Rover::executeEngine(const std::string& command) {
     std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
     if (command == "start") {
-        engineOn = true;
+        engine = true;
         std::cout << "Executing engine command: ON\n";
     } else if (command == "stop") {
-        engineOn = false;
+        engine = false;
         std::cout << "Executing engine command: OFF\n";
     } else {
         std::cout << "Error: Unknown engine command '" << command << "'\n";
@@ -89,13 +95,46 @@ void Rover::executeArm(std::string command) {
     std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
     if (command == "arm") {
         throttle(1);
-        armState = true;
         std::cout << "Executing arm command: armed\n";
     } else if (command == "disarm") {
         throttle(0);
-        armState = false;
         std::cout << "Executing disarm command: disarmed\n";
     } else {
         std::cout << "Error: Unknown arm command '" << command << "'\n";
+    }
+}
+
+void Rover::executeMode(const std::string& mode, const std::string& type) {
+    std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
+    if (type == "flight") {
+        std::cout << "Executing flight mode change to '" << mode << "'\n";
+        if (mode == "manual") {
+            setFlightMode(Mode::MANUAL);
+        } else if (mode == "acro") {
+            setFlightMode(Mode::ACRO);
+        } else if (mode == "steering") {
+            setFlightMode(Mode::STEERING);
+        } else if (mode == "hold") {
+            setFlightMode(Mode::HOLD);
+        } else if (mode == "loiter") {
+            setFlightMode(Mode::LOITER);
+        } else if (mode == "follow") {
+            setFlightMode(Mode::FOLLOW);
+        } else if (mode == "simple") {
+            setFlightMode(Mode::SIMPLE);
+        } else if (mode == "auto") {
+            setFlightMode(Mode::AUTO);
+        } else if (mode == "rtl") {
+            setFlightMode(Mode::RTL);
+        } else if (mode == "guided") {
+            setFlightMode(Mode::GUIDED);
+        } else if (mode == "smart_rtl") {
+            setFlightMode(Mode::SMART_RTL);
+        } else {
+            std::cout << "Error: Unknown flight mode '" << mode << "'\n";
+        }
+    }
+    else {
+        std::cout << "Other mode changes unavailable atm" << std::endl;
     }
 }

@@ -49,3 +49,7 @@ void Plane::executeEngine(const std::string& command) {
 void Plane::executeArm(std::string action) {
     std::cout << "Plane executing arm action: " << action << "\n";
 }
+
+void Plane::executeMode(const std::string& mode, const std::string& type) {
+    std::cout << "Plane executing mode change to: " << mode << " of type: " << type << "\n";
+}

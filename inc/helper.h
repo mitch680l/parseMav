@@ -10,7 +10,7 @@
 #include "config.h"
 
 //Degrees to pwm 1000-2000 range for servos
-int angleToPwm(float angleDeg);
+int angleToPwm(float angleDeg, double modifier);
 // Convert angle in degrees to radians
 double deg2rad(double deg);
 // Convert angle in radians to degrees
@@ -20,3 +20,4 @@ double vincenty(double lat1_deg, double lon1_deg, double lat2_deg, double lon2_d
 //calculate destination point given start point, bearing and distance using Vincenty formula
 void vincentyDirect(double lat1_deg, double lon1_deg, double bearing_deg, double distance_m,double &lat2_deg, double &lon2_deg);
 //read waypoints.csv to match name
+std::string getMissionStateName(int num);

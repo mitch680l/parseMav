@@ -1,15 +1,20 @@
 #include "Vehicle.h"
 #include <optional>
-std::vector<MissionItem> Vehicle::missionPlan;
-std::atomic<bool> Vehicle::armState{false};
-std::atomic<bool> Vehicle::missionRunning{false};
-std::atomic<bool> Vehicle::missionNeedsStart{true};
-std::mutex Vehicle::missionMutex;
 std::unordered_map<std::string, Waypoint> waypointMap;
-FlightMode Vehicle::autopilotMode{FlightMode::MANUAL};
+std::vector<MissionItem> Vehicle::missionPlan;
+std::mutex Vehicle::missionMutex;
+std::atomic<bool> Vehicle::missionRunning{false};
+std::atomic<bool> Vehicle::missionNeedsStart{false};
+std::atomic<bool> Vehicle::missionPaused{false};
+std::atomic<bool> Vehicle::engine{false};
+std::atomic<bool> Vehicle::brake{false};
+std::atomic<bool> Vehicle::monitorRunning{false};
+int Vehicle::pan_position = (SERVO_PAN_START-PWM_MIN)/modifier_pan;
+int Vehicle::tilt_position = (SERVO_TILT_START-PWM_MIN)/modifier_tilt;
 
 Vehicle::Vehicle() {
-    /*
+
+    if (LAUNCH_READER) {
     pid_t pid = fork();
     if (pid < 0) {
         std::perror("[ERROR] fork failed");
@@ -23,18 +28,21 @@ Vehicle::Vehicle() {
     }
     childPid = pid;
     std::cout << "[DEBUG] Spawned helper process with PID: " << childPid << "\n";
-    */
-    if (!open_ipc()) {
+    }
+
+    if (!create_ipc()) {
         std::cerr << "Error: failed to open shared memory\n";
 
     }
     if (!init_cmd_uart()) {
         std::cerr << "Error: failed to open UART\n";
     }
-
+    
     loadWaypoints();
     startMonitor();
+    
 }
+
 Vehicle::~Vehicle() {
     stopMonitor();
 
@@ -63,6 +71,7 @@ void Vehicle::showMissionDetails() {
                   << "\n";
     }
 }
+
 bool Vehicle::validateCommand(const Command& cmd) {
     cmd.printArgs();
     const auto& action = cmd.getAction();
@@ -104,6 +113,9 @@ bool Vehicle::validateCommand(const Command& cmd) {
     else if (action == "advance") {
         return validateAdvance(args);
     }
+    else if (action == "mode") {
+        return validateMode(preArgs, args);
+    }
     else if (action == "arm") {
         executeArm("arm");
         return true;
@@ -117,6 +129,14 @@ bool Vehicle::validateCommand(const Command& cmd) {
     }
     else if (action == "go") {
         return validateGo(preArgs, args);   
+    }
+    else if (action == "testuart") {
+        if (cmd_fd >= 0) {
+            close(cmd_fd);
+            cmd_fd = -1;
+            std::cout << "[TEST] UART forcibly closed\n";
+        }
+    return true;
     }
     else {
         std::cout << "[" << getName() << "] Unknown action: " << action << "\n";
@@ -137,7 +157,6 @@ bool Vehicle::validateStart() {
     executeStart();
     return true;
 }
-
 
 bool Vehicle::validateMove(const std::vector<std::string>& args) {
     const int maxLookahead = 3;
@@ -172,44 +191,209 @@ bool Vehicle::validateMove(const std::vector<std::string>& args) {
     return true;
 }
 
-
 bool Vehicle::validatePan(const std::vector<std::string>& args) {
-    float deg = 0.0f;
-    bool found = false;
+    if (args.empty()) {
+        std::cout << "[" << getName() << "] Pan command requires direction, angle, and unit\n";
+        return false;
+    }
+
+    std::string direction;
+    float value = 0.0f;
+    std::string unit;
+
+    bool direction_found = false;
+    bool value_found = false;
+    bool unit_found = false;
+
+    // STEP 1: Find direction anywhere
     for (const auto& token : args) {
-        try { deg = std::stof(token); found = true; break; }
-        catch(...) { continue; }
+        std::string lower = token;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        if (lower == "left" || lower == "right") {
+            direction = lower;
+            direction_found = true;
+            break;
+        }
     }
-    if (!found) {
-        std::cout << "["<< getName() <<"] Pan command needs a numeric angle\n";
+
+    if (!direction_found) {
+        std::cout << "[" << getName() << "] Pan command requires direction (left/right)\n";
         return false;
     }
-    if (deg < 0.0f || deg > 180.0f) {
-        std::cout << "["<< getName() <<"] Pan angle out of range (0-180)\n";
+
+    // STEP 2: Find number followed within 3 tokens by a valid unit
+    for (int i = 0; i < (int)args.size(); ++i) {
+        try {
+            float test_value = std::stof(args[i]);
+            // Search next 3 tokens for a valid unit
+            for (int j = i + 1, count = 0; j < (int)args.size() && count < 3; ++j, ++count) {
+                std::string unit_token = args[j];
+                std::transform(unit_token.begin(), unit_token.end(), unit_token.begin(), ::tolower);
+                if (unit_token == "deg" || unit_token == "degrees" ||
+                    unit_token == "rad" || unit_token == "radians" ||
+                    unit_token == "mil" || unit_token == "mils") {
+                    value = test_value;
+                    unit = unit_token;
+                    value_found = unit_found = true;
+                    break;
+                }
+            }
+
+            if (value_found && unit_found) break;
+        } catch (...) {
+            continue;
+        }
+    }
+
+    if (!value_found) {
+        std::cout << "[" << getName() << "] Pan command requires a numeric angle\n";
         return false;
     }
-    std::cout << "["<< getName() <<"] ACK pan "<< deg <<" degrees\n";
-    executePan(deg);
+
+    if (!unit_found) {
+        std::cout << "[" << getName() << "] Pan command requires a unit (degrees, radians, mils) within 3 words after the angle\n";
+        return false;
+    }
+
+    if (value <= 0.0f) {
+        std::cout << "[" << getName() << "] Pan angle must be positive\n";
+        return false;
+    }
+
+    // Normalize to degrees
+    std::transform(unit.begin(), unit.end(), unit.begin(), ::tolower);
+    float degrees = value;
+    if (unit == "rad" || unit == "radians") {
+        degrees = value * (180.0f / M_PI);
+    } else if (unit == "mil" || unit == "mils") {
+        degrees = value * (360.0f / 6400.0f);
+    }
+
+    constexpr float MIN_PAN = 0.0f;
+    constexpr float MAX_PAN = 180.0f;
+    float current_pos = Vehicle::pan_position;
+    float new_position = current_pos;
+
+    if (direction == "right") {
+        new_position += degrees;
+    } else if (direction == "left") {
+        new_position -= degrees;
+    }
+
+    if (new_position < MIN_PAN || new_position > MAX_PAN) {
+        std::cout << "[" << getName() << "] Pan command would move servo out of range (0-180 degrees)\n";
+        new_position = std::clamp(new_position, MIN_PAN, MAX_PAN);
+    }
+
+    std::cout << "[" << getName() << "] ACK pan " << direction << " " << value << " " << unit
+              << " (moving from " << current_pos << "° to " << new_position << "°)\n";
+
+    Vehicle::pan_position = new_position;
+    executePan(new_position);
     return true;
 }
 
 bool Vehicle::validateTilt(const std::vector<std::string>& args) {
-    float deg = 0.0f;
-    bool found = false;
+    if (args.empty()) {
+        std::cout << "[" << getName() << "] Tilt command requires direction, angle, and unit\n";
+        return false;
+    }
+
+    std::string direction;
+    float value = 0.0f;
+    std::string unit;
+
+    bool direction_found = false;
+    bool value_found = false;
+    bool unit_found = false;
+
+    // STEP 1: Search for direction anywhere
     for (const auto& token : args) {
-        try { deg = std::stof(token); found = true; break; }
-        catch(...) { continue; }
+        std::string lower = token;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        if (lower == "up" || lower == "down" ||
+            lower == "clockwise" || lower == "counterclockwise") {
+            direction = lower;
+            direction_found = true;
+            break;
+        }
     }
-    if (!found) {
-        std::cout << "["<< getName() <<"] Tilt command needs a numeric angle\n";
+
+    if (!direction_found) {
+        std::cout << "[" << getName() << "] Tilt command requires direction (up/down/etc)\n";
         return false;
     }
-    if (deg < 0.0f || deg > 180.0f) {
-        std::cout << "["<< getName() <<"] Tilt angle out of range (0-180)\n";
+
+    // STEP 2: Search for a number and a valid unit within 3 tokens after it
+    for (int i = 0; i < (int)args.size(); ++i) {
+        try {
+            float test_value = std::stof(args[i]);
+            // Check the next 3 tokens for a valid unit
+            for (int j = i + 1, count = 0; j < (int)args.size() && count < 3; ++j, ++count) {
+                std::string unit_token = args[j];
+                std::transform(unit_token.begin(), unit_token.end(), unit_token.begin(), ::tolower);
+                if (unit_token == "deg" || unit_token == "degrees" ||
+                    unit_token == "rad" || unit_token == "radians" ||
+                    unit_token == "mil" || unit_token == "mils") {
+                    // Success
+                    value = test_value;
+                    unit = unit_token;
+                    value_found = unit_found = true;
+                    break;
+                }
+            }
+
+            if (value_found && unit_found) break; // chain found, exit outer loop
+        } catch (...) {
+            continue;
+        }
+    }
+
+    if (!value_found) {
+        std::cout << "[" << getName() << "] Tilt command requires a numeric angle\n";
         return false;
     }
-    std::cout << "["<< getName() <<"] ACK tilt "<< deg <<" degrees\n";
-    executeTilt(deg);
+
+    if (!unit_found) {
+        std::cout << "[" << getName() << "] Tilt command requires a unit (degrees, radians, mils) within 3 words after the angle\n";
+        return false;
+    }
+
+    if (value <= 0.0f) {
+        std::cout << "[" << getName() << "] Tilt angle must be positive\n";
+        return false;
+    }
+
+    // Normalize to degrees
+    std::transform(unit.begin(), unit.end(), unit.begin(), ::tolower);
+    float degrees = value;
+    if (unit == "rad" || unit == "radians") {
+        degrees = value * (180.0f / M_PI);
+    } else if (unit == "mil" || unit == "mils") {
+        degrees = value * (360.0f / 6400.0f);
+    }
+
+    constexpr float MIN_TILT = 0.0f;
+    constexpr float MAX_TILT = 180.0f;
+    float current_pos = Vehicle::tilt_position;
+    float new_position = current_pos;
+
+    if (direction == "up" || direction == "clockwise") {
+        new_position += degrees;
+    } else if (direction == "down" || direction == "counterclockwise") {
+        new_position -= degrees;
+    }
+
+    if (new_position < MIN_TILT || new_position > MAX_TILT) {
+        std::cout << "[" << getName() << "] Tilt command would move servo out of range (0-180 degrees)\n";
+        new_position = std::clamp(new_position, MIN_TILT, MAX_TILT);
+    }
+
+    std::cout << "[" << getName() << "] ACK tilt " << direction << " " << value << " " << unit
+              << " (moving from " << current_pos << "° to " << new_position << "°)\n";
+
+    Vehicle::tilt_position = new_position;
+    executeTilt(new_position);
     return true;
 }
 
@@ -390,6 +574,8 @@ bool Vehicle::validateAdvance(const std::vector<std::string>& args) {
 }
 
 void Vehicle::startMonitor() {
+    SendServo(PAN_CHANNEL,SERVO_PAN_START);
+    SendServo(TILT_CHANNEL,SERVO_TILT_START);
     monitorRunning = true;
     monitorThread = std::thread(&Vehicle::monitorLoop, this);
 }
@@ -403,47 +589,96 @@ void Vehicle::stopMonitor() {
 
 void Vehicle::monitorLoop() {
     while (monitorRunning) {
-        bool shouldStart = false;
+            const int MAX_RETRIES = 3;
+
+            if (!checkUartHealth()) {
+                health.uartFailCount++;
+                if (health.uartFailCount <= MAX_RETRIES && attemptReinitUart()) {
+                    std::cout << "[" << getName() << "] UART reinitialized successfully.\n";
+                    health.uartAlive = true;
+                } else {
+                    std::cout << "[" << getName() << "] UART health check failed, reinitialization failed.\n";
+                    health.uartAlive = false;
+                }
+            } else {
+                health.uartFailCount = 0;
+                health.uartAlive = true;
+            }
+
+            if (!checkIpcPointer()) {
+                health.ipcFailCount++;
+                if (health.ipcFailCount <= MAX_RETRIES && reopenIpc()) {
+                    health.ipcAlive = true;
+                } else {
+                    health.ipcAlive = false;
+                }
+            } else {
+                health.ipcFailCount = 0;
+                health.ipcAlive = true;
+            }
+
+            if (!checkReaderProcess()) {
+                health.readerFailCount++;
+                if (health.readerFailCount <= MAX_RETRIES && restartReaderProcess()) {
+                    health.readerAlive = true;
+                } else {
+                    health.readerAlive = false;
+                }
+            } else {
+                health.readerFailCount = 0;
+                health.readerAlive = true;
+            }
+        
         {
             std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
+            #if DEBUG_MONITOR_STATE 
+            pthread_mutex_lock(&shm_ptr->mutex);
+            std::cout << "[" << getName() << "] MISSION STATE: "
+                      << "running: " << missionRunning
+                      << ", needs to start: " << missionNeedsStart
+                      << ", size: " << missionPlan.size() << std::endl;
 
-            std::cout << "[" << getName() << "] Vehicle state "
-                      << "Engine: " << engineOn
-                      << ", missionRunning: " << missionRunning
-                      << ", missionNeedsStart: " << missionNeedsStart
-                      << ", mission size: " << missionPlan.size() 
-                      << ", autopilot state: " << static_cast<int>(autopilotMode) 
-                      << ", armState: " << armState
+                      std::cout << "[" << getName() << "]" << " AUTOPILOT STATUS: " << getModeName(shm_ptr->mode)
+                      << " " << (shm_ptr->armed ? "ARMED" : "DISARMED")
                       << std::endl;
+            pthread_mutex_unlock(&shm_ptr->mutex);
+            #endif
 
-            if (!missionRunning && missionNeedsStart && engineOn && !missionPlan.empty()) {
-                missionRunning = true;
-                missionNeedsStart = false;
-                shouldStart = true;
+            #if DEBUG_SHARED_TELEM
+            pthread_mutex_lock(&shm_ptr->mutex);
+            std::cout << "[" << getName() << "] Shared Telemetry State: "
+                      << "Lat: " << shm_ptr->lat
+                      << ", Lon: " << shm_ptr->lon
+                      << ", Alt: " << shm_ptr->alt
+                      << ", Yaw: " << shm_ptr->yaw_deg
+                      << ", Seq: " << shm_ptr->seq
+                      << ", Mission State: " << static_cast<int>(shm_ptr->missionState)
+                      << ", Mission Count: " << shm_ptr->missionCount
+                      << ", Current Seq: " << static_cast<int>(shm_ptr->current_seq)
+                      << ", Armed: " << shm_ptr->armed
+                      << std::endl;
+            pthread_mutex_unlock(&shm_ptr->mutex);  
+            #endif
+
+
+            /*
+            This section should check to see that saftey systems are running IT SHOULD NOT be the initiator of those systems.
+            This loop runs at 0.25 Hz(currently) which is not a good enough response time for saftey systems.
+            */
+            if (!engine || brake) {
+                //ensure vehicle is not running(CRITICAL)
+
             }
-            else if (missionRunning && engineOn) {
-                pthread_mutex_lock(&shm_ptr->mutex);
-                if (shm_ptr->current_seq >= missionPlan.size()) {
-                    std::cout << "[" << getName() << "] Mission completed.\n";
-                    missionRunning = false;
-                    missionNeedsStart = true;
-                    shm_ptr->missionState = MissionExecState::COMPLETED;
-                }
-                pthread_mutex_unlock(&shm_ptr->mutex);
-            }
-            else if (engineOn) {
-                missionNeedsStart = true;
-            }
-            else if (!engineOn && missionRunning) {
-                std::cout << "[" << getName() << "] Mission is running, but engine is off. Stopping mission.\n";
-                //executeStop();
-                missionRunning = false;
-            }
-            else {
-                missionNeedsStart = true;
-            }
+
+            
+
+
+
+            
+            
         }
-
+        
+        #if AUTOSTART_MISSION
         if (shouldStart) {
             std::cout << "[" << getName() << "] Starting mission...\n";
             {
@@ -452,10 +687,11 @@ void Vehicle::monitorLoop() {
             }
             setMissionCurrent(0);
             //arm
-            setFlightMode(FlightMode::AUTO);
+            //setFlightMode(FlightMode::AUTO);
             std::cout << "[" << getName() << "] Mission started.\n";
         }
-
+        #endif
+        
         std::this_thread::sleep_for(std::chrono::seconds(4));
     }
 }
@@ -518,7 +754,12 @@ bool Vehicle::validateMission(const std::vector<std::string>& args, const std::v
         {"cancel", "abort"},
         {"details", "details"},
         {"info", "details"},
-        {"show", "details"}
+        {"show", "details"},
+        {"plan", "details"},
+        {"list", "details"},
+        {"clear", "clear"},
+        {"reset", "clear"},
+        {"upload", "upload"},
     };
 
     for (const std::string& raw : preArgs) {
@@ -538,4 +779,94 @@ bool Vehicle::validateMission(const std::vector<std::string>& args, const std::v
     return false;
 
     
+}
+
+bool Vehicle::checkUartHealth() {
+    if (cmd_fd < 0) return false;
+
+    uint8_t testByte = 0x00;
+    ssize_t result = write(cmd_fd, &testByte, 1);
+    return result > 0;
+}
+
+bool Vehicle::attemptReinitUart() {
+    if (cmd_fd >= 0) {
+        close(cmd_fd);
+        cmd_fd = -1;
+    }
+
+    std::cout << "[Monitor] Attempting UART reinitialization...\n";
+    return init_cmd_uart();  // reuse your existing init function
+}
+
+bool Vehicle::checkIpcPointer() {
+    if (!shm_ptr) return false;
+
+    if (pthread_mutex_trylock(&shm_ptr->mutex) == 0) {
+        pthread_mutex_unlock(&shm_ptr->mutex);
+        return true;
+    } else {
+        std::cerr << "[Monitor] Shared memory mutex seems locked or invalid\n";
+        return false;
+    }
+}
+
+bool Vehicle::reopenIpc() {
+    std::cout << "[Monitor] Attempting to reopen shared memory...\n";
+    return open_ipc();  // reuse your existing init function
+}
+
+bool Vehicle::checkReaderProcess() {
+    if (childPid <= 0) return false;
+
+    int status;
+    pid_t result = waitpid(childPid, &status, WNOHANG);
+
+    if (result == 0) return true;  // still running
+    if (result == childPid) {
+        std::cerr << "[Monitor] Reader exited unexpectedly with status " << status << "\n";
+        childPid = -1;
+        return false;
+    }
+
+    return false;
+}
+
+bool Vehicle::restartReaderProcess() {
+    std::cout << "[Monitor] Restarting reader process...\n";
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        std::perror("[ERROR] fork failed");
+        return false;
+    }
+
+    if (pid == 0) {
+        execl("./reader", "reader", nullptr);
+        std::perror("[ERROR] exec failed");
+        _exit(1);
+    }
+
+    childPid = pid;
+    std::cout << "[DEBUG] Reader restarted with PID: " << childPid << "\n";
+    return true;
+}
+
+bool Vehicle::validateMode(const std::vector<std::string>& preArgs, const std::vector<std::string>& args) {
+    if (args.empty()) {
+        std::cout << "[" << getName() << "] Mode command requires a mode name\n";
+        return false;
+    }
+
+    std::string mode = args[0];
+    std::string type = args[1];
+    std::transform(mode.begin(), mode.end(), mode.begin(), ::tolower);
+
+    if (mode == "auto" || mode == "manual" || mode == "guided" || mode == "rtl") {
+        executeMode(mode, type);
+        return true;
+    } else {
+        std::cout << "[" << getName() << "] Unknown mode: " << mode << "\n";
+        return false;
+    }
 }

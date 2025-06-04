@@ -11,7 +11,7 @@
 #include <thread>
 
 
-int cmd_fd = -1;
+int cmd_fd = -1;  // File descriptor for command UART
 
 
 
@@ -68,6 +68,19 @@ void SendServo(uint8_t servo, uint16_t pwm) {
     mavlink_message_t msg;
     uint8_t buf[MAVLINK_MAX_PACKET_LEN];
 
+    mavlink_msg_command_long_pack(
+        SYSID, COMPID, &msg,
+        TARGET_SYS, TARGET_COMP,
+        MAV_CMD_DO_SET_SERVO, 
+        0,
+        servo,                    
+        pwm,
+        0,              
+        0,          
+        0, 0, 0  
+    );
+
+    /*
     mavlink_msg_servo_output_raw_pack(
         SYSID,             
         COMPID,            
@@ -79,7 +92,7 @@ void SendServo(uint8_t servo, uint16_t pwm) {
         0,0,0,0,0,0,0,0,
         0,0,0,0,0,0     
     );
-
+    */
     size_t len = mavlink_msg_to_send_buffer(buf, &msg);
     Send(cmd_fd, buf, len);
     std::cout << "[MAVLink] Sent servo command: servo=" << (int)servo << ", pwm=" << pwm << "\n";
@@ -108,10 +121,10 @@ void clearMission() {
 /*
 TO_DO: THis dosn't work very well
 */
-bool setFlightMode(FlightMode fm) {
+bool setFlightMode(int mode) {
     // 1) pick the right MAV_MODE_* define for param1
     uint8_t base_mode = MAV_MODE_FLAG_CUSTOM_MODE_ENABLED;
-    uint32_t custom_mode = 10; 
+    uint32_t custom_mode = mode; 
 
     // 2) pack COMMAND_LONG for MAV_CMD_DO_SET_MODE (176)
     //    PARAM1 = mav_mode (one of the MAV_MODE_*_ARMED constants)
@@ -133,7 +146,7 @@ bool setFlightMode(FlightMode fm) {
     uint8_t buf[MAVLINK_MAX_PACKET_LEN];
     size_t  len = mavlink_msg_to_send_buffer(buf, &msg);
     Send(cmd_fd, buf, len);
-    std::cout << "[MAVLink] Sent flight mode command: " << static_cast<int>(fm) << "\n";
+    std::cout << "[MAVLink] Sent flight mode command: " << static_cast<int>(mode) << "\n";
     return true;
 }
 
@@ -270,7 +283,7 @@ void startMissionUpload(std::vector<MissionItem>& missionPlan) {
     size_t nextIndex = 0;
     while (true) {
         pthread_mutex_lock(&shm_ptr->mutex);
-        MissionExecState state = shm_ptr->missionState;
+        MissionExecState state = shm_ptr->missionUploadState;
         pthread_mutex_unlock(&shm_ptr->mutex);
 
         if (state == NEXT && nextIndex < missionPlan.size()) {
@@ -301,13 +314,13 @@ void startMissionUpload(std::vector<MissionItem>& missionPlan) {
             nextIndex++;
 
             pthread_mutex_lock(&shm_ptr->mutex);
-            shm_ptr->missionState = (nextIndex >= missionPlan.size()) ? COMPLETED : RUNNING;
+            shm_ptr->missionUploadState = (nextIndex >= missionPlan.size()) ? COMPLETED : RUNNING;
             pthread_mutex_unlock(&shm_ptr->mutex);
         }
 
         if (state == COMPLETED) {
             pthread_mutex_lock(&shm_ptr->mutex);
-            shm_ptr->missionState = IDLE;
+            shm_ptr->missionUploadState = IDLE;
             shm_ptr->missionCount = missionPlan.size();
             pthread_mutex_unlock(&shm_ptr->mutex);
 

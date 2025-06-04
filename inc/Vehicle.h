@@ -27,6 +27,7 @@ class Vehicle {
         Vehicle(); 
         virtual ~Vehicle();          
         virtual std::string getName() const = 0;
+        virtual std::string getModeName(uint32_t custom_mode) const = 0;
     
         /*
         This is the main control loop for the vehicle. It takes in the command interface between the parser and vehicle.
@@ -40,6 +41,12 @@ class Vehicle {
         void stopMonitor();
         void loadWaypoints();
         bool getWaypointCoords(const std::string& name, double* lat, double* lng, double* alt);
+        bool checkUartHealth();
+        bool attemptReinitUart();
+        bool reopenIpc();
+        bool checkIpcPointer();
+        bool checkReaderProcess();
+        bool restartReaderProcess();
 
         virtual void showMissionDetails();
         virtual bool validateStop();
@@ -53,6 +60,8 @@ class Vehicle {
         virtual bool validateAdvance(const std::vector<std::string>& args);
         virtual bool validateGo(const std::vector<std::string>& preArgs, const std::vector<std::string>& args);
         virtual bool validateVacate(const std::vector<std::string>& preArgs, const std::vector<std::string>& args);
+        virtual bool validateMode(const std::vector<std::string>& preArgs, const std::vector<std::string>& args);
+        
 
         virtual void executeTurn(float yaw, int direction, bool relative) = 0;
         virtual void executeAdvance(float lat, float lng, float alt) = 0;
@@ -64,6 +73,7 @@ class Vehicle {
         virtual void executeMission(std::string missionCommand) = 0;
         virtual void executeEngine(const std::string& command) = 0;
         virtual void executeArm(std::string command) = 0;
+        virtual void executeMode(const std::string& mode, const std::string& type) = 0;
 
 
     protected:
@@ -73,10 +83,15 @@ class Vehicle {
         static std::vector<MissionItem> missionPlan; //mission plan vector
         static std::atomic<bool> missionRunning; //is mission running?
         static std::atomic<bool> missionNeedsStart; //does mission need to be started?(true when mission plan is loaded, but not started yet)
-        static FlightMode autopilotMode; //guided/auto/manual etc
+        static std::atomic<bool> missionPaused;
+        static std::atomic<bool> monitorRunning;
+        static std::atomic<bool> engine;
+        static std::atomic<bool> brake;
         pid_t childPid = -1; //TO-DO: implment reader as child process
         std::thread monitorThread; // thread for handling vehicle state
-        std::atomic<bool> monitorRunning{true};//flag for if the background thread is running
-        std::atomic<bool> engineOn{false}; //flag for if the engine is on
+        
         static std::mutex missionMutex; // mutex for mission plan access
+        static int pan_position;
+        static int tilt_position;
+        HealthStatus health;
     };

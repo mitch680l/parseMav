@@ -24,7 +24,8 @@ int main() {
     double bearing = 90;
     getBearing(&bearing);
     std::cout << "Current bearing: " << bearing << std::endl;
-
+    SendServo(7,1000);
+    SendServo(8,1000);
     double lat2, lon2;
     vincentyDirect(lat1, lon1, bearing, distance, lat2, lon2);
     std::cout << "Vincenty direct result1: " << lat2 << ", " << lon2 << std::endl;
@@ -41,7 +42,7 @@ int main() {
     
     throttle(1);
     std::cout << "Throttle Armed" << std::endl;
-    setFlightMode(FlightMode::AUTO);
+    //setFlightMode(FlightMode::AUTO);
     std::cout << "Flight mode set to AUTO" << std::endl;
     std::cout << getMissionSize(missionPlan) << " waypoints in the mission plan" << std::endl;
     distance2 = 10000;
