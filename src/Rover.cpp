@@ -9,13 +9,13 @@ Rover::~Rover() = default;
 
 void Rover::executeStop() {
     std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
-    engine = false;
+    flags.engine = false;
     std::cout << "Executing stop: idle throttle, full brake, neutral gear, ignition OFF\n";
 }
 
 void Rover::executeStart() {
     std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
-    engine = true;
+    flags.engine = true;
     std::cout << "Executing start: ignition ON, system ready\n";
 }
 
@@ -57,8 +57,9 @@ std::string Rover::getName() const {
   }
 
 void Rover::executeMission(std::string missionCommand) {
+    std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
     if (missionCommand == "start") {
-        sendMissionStartCommand();
+        flags.shouldStart = true;
     } else if (missionCommand == "stop") {
         sendMissionStopCommand();
     } else if (missionCommand == "pause") {
@@ -68,10 +69,11 @@ void Rover::executeMission(std::string missionCommand) {
     } else if (missionCommand == "details") {
         showMissionDetails();
     } else if (missionCommand == "clear") {
-        std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
         missionPlan.clear(); //clear mission plan vector
         std::cout << "Executing mission clear: cleared all waypoints and commands\n";
         clearMission(); //clear autopilot
+    } else if (missionCommand == "upload") {
+        flags.shouldLoad = true;
     }
     else {
         std::cout << "Error: Unknown mission command " << missionCommand << "'\n";
@@ -81,10 +83,10 @@ void Rover::executeMission(std::string missionCommand) {
 void Rover::executeEngine(const std::string& command) {
     std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
     if (command == "start") {
-        engine = true;
+        flags.engine = true;
         std::cout << "Executing engine command: ON\n";
     } else if (command == "stop") {
-        engine = false;
+        flags.engine = false;
         std::cout << "Executing engine command: OFF\n";
     } else {
         std::cout << "Error: Unknown engine command '" << command << "'\n";

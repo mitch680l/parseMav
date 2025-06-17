@@ -11,7 +11,7 @@
 #include <iomanip>
 #include <poll.h>
 #include <chrono>
-int uart_fd = -1;
+
 // Shared-memory structure
 SharedTelem* shm_ptr = nullptr;
 constexpr size_t RING_BUFFER_SIZE = 1024;
@@ -72,11 +72,13 @@ bool create_ipc() {
     shm_ptr->yaw_deg      = 0.0;
     shm_ptr->seq          = 0;
     shm_ptr->missionUploadState = IDLE;
+    shm_ptr->missionCountAutopilot = 0;
     shm_ptr->missionCount = 0;
     shm_ptr->current_seq  = 0;
     shm_ptr->armed        = false;
     shm_ptr->mode         = 0;
-    shm_ptr->mission_state = MISSION_IDLE;
+    shm_ptr->mission_state = MISSION_UNKNOWN;
+    shm_ptr->requestParams = false;
     return true;
 }
 
@@ -98,6 +100,15 @@ bool open_ipc() {
 }
 
 int init_uart() {
+#if SIM_MODE
+    if (uart_fd < 0) {
+        std::cerr << "[TCP_MODE] init_uart: uart_fd not valid — TCP connection was not accepted in parent\n";
+        return -1;
+    }
+
+    std::cout << "[TCP_MODE] init_uart: using inherited TCP socket fd=" << uart_fd << "\n";
+    return 0;
+#else
     uart_fd = open(UART_DEVICE, O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (uart_fd < 0) {
         std::cerr << "[ERROR] Failed to open UART: " << strerror(errno) << "\n";
@@ -149,6 +160,7 @@ int init_uart() {
     // Flush any garbage in the buffer
     tcflush(uart_fd, TCIFLUSH);
     return 0;
+#endif
 }
 
 
@@ -157,8 +169,7 @@ void readerLoop() {
     mavlink_message_t msg;
     mavlink_status_t status;
     uint8_t buf[128];
-    uint8_t hb_buf[MAVLINK_MAX_PACKET_LEN];
-    size_t hb_len;
+    
     struct pollfd pfd{ .fd = uart_fd, .events = POLLIN };
 
     while (true) {
@@ -175,14 +186,6 @@ void readerLoop() {
         // Send GCS heartbeat every second
         now = std::chrono::steady_clock::now();
         if (now >= next_hb) {
-            mavlink_message_t hb_msg;
-            mavlink_msg_heartbeat_pack(
-                SYSID, COMPID, &hb_msg,
-                MAV_TYPE_GCS, MAV_AUTOPILOT_INVALID,
-                0, 0, MAV_STATE_ACTIVE
-            );
-            hb_len = mavlink_msg_to_send_buffer(hb_buf, &hb_msg);
-            Send(uart_fd, hb_buf, hb_len);
             next_hb = now + std::chrono::seconds(1);
         }
 
@@ -224,7 +227,7 @@ void readerLoop() {
                                 shm_ptr->lat = gp.lat / 1e7;
                                 shm_ptr->lon = gp.lon / 1e7;
                                 shm_ptr->alt = gp.alt / 1000.0;
-                                shm_ptr->seq++;
+                          
                     #if DEBUG_POSITION_MESSAGES
                                 std::cout << "[GLOBAL_POSITION] lat=" << shm_ptr->lat 
                                         << " lon=" << shm_ptr->lon 
@@ -240,7 +243,7 @@ void readerLoop() {
                                 mavlink_attitude_t att;
                                 mavlink_msg_attitude_decode(&msg, &att);
                                 shm_ptr->yaw_deg = att.yaw * 180.0f / M_PI;
-                                shm_ptr->seq++;
+                              
                     #if DEBUG_ATTITUDE_MESSAGES
                                 std::cout << "[ATTITUDE] roll=" << att.roll * 180.0f / M_PI << "° "
                                         << "pitch=" << att.pitch * 180.0f / M_PI << "° "
@@ -391,6 +394,7 @@ void readerLoop() {
                             case MAVLINK_MSG_ID_MISSION_ACK: {
                                 mavlink_mission_ack_t ack;
                                 mavlink_msg_mission_ack_decode(&msg, &ack);
+                                
                     #if DEBUG_MISSION_MESSAGES
                                 std::cout << "[MISSION_ACK] type=" << (int)ack.type 
                                         << " mission_type=" << (int)ack.mission_type
@@ -407,9 +411,11 @@ void readerLoop() {
                             case MAVLINK_MSG_ID_MISSION_CURRENT: {
                                 mavlink_mission_current_t mc;
                                 mavlink_msg_mission_current_decode(&msg, &mc);
-                                shm_ptr->seq = mc.seq;
-                    #if DEBUG_MISSION_MESSAGES
+                                shm_ptr->missionCountAutopilot = mc.total+1;
                                 shm_ptr->current_seq = mc.seq;
+                                shm_ptr->mission_state = static_cast<MissionState>(mc.mission_state);
+                    #if DEBUG_MISSION_MESSAGES
+                                
                                 std::cout << "[MISSION_CURRENT] seq=" << mc.seq 
                                         << " total=" << mc.total
                                         << " mission_state=" << (int)mc.mission_state
@@ -421,7 +427,6 @@ void readerLoop() {
                             case MAVLINK_MSG_ID_MISSION_ITEM_REACHED: {
                                 mavlink_mission_item_reached_t mir;
                                 mavlink_msg_mission_item_reached_decode(&msg, &mir);
-                                shm_ptr->current_seq = mir.seq + 1;
                     #if DEBUG_MISSION_MESSAGES
                                 std::cout << "[MISSION_ITEM_REACHED] seq=" << mir.seq << " (next=" << shm_ptr->current_seq << ")\n";
                     #endif
@@ -816,7 +821,37 @@ void readerLoop() {
                         #endif
                             break;
                         }
+                        case MAVLINK_MSG_ID_PARAM_REQUEST_LIST: {
+                            shm_ptr->requestParams = true;
+                            std::cout << "[PARAM_REQUEST_LIST]" << std::endl;
+                            break;
+                        }
+                        case MAVLINK_MSG_ID_SIMSTATE: {
+                            mavlink_simstate_t simstate;
+                            mavlink_msg_simstate_decode(&msg, &simstate);
+                        #if DEBUG_SIM_MESSAGES
+                            std::cout << "[SIMSTATE] roll=" << simstate.roll
+                                    << " pitch=" << simstate.pitch
+                                    << " yaw=" << simstate.yaw
+                                    << " lat=" << simstate.lat / 1e7
+                                    << " xacc=" << simstate.xacc
+                                    << " yacc=" << simstate.yacc
+                                    << " zacc=" << simstate.zacc
+                                    << "\n";
+                        #endif
+                            break;
+                        }
+                        case  MAVLINK_MSG_ID_FILE_TRANSFER_PROTOCOL: {
+                            mavlink_file_transfer_protocol_t ftp;
+                            mavlink_msg_file_transfer_protocol_decode(&msg, &ftp);
+                            std::cout << "[FILE_TRANSFER_PROTOCOL] target_network=" << (int)ftp.target_network
+                                    << " target_system=" << (int)ftp.target_system
+                                    << " target_component=" << (int)ftp.target_component
+                                    << " payload_length=" << sizeof(ftp.payload) << "\n";
+                            break;
 
+                        }
+                               
                             default:
                                 
                                 std::cout << "[UNKNOWN] msgid=" << msg.msgid

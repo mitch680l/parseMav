@@ -10,12 +10,13 @@
 #include <regex>
 #include "helper.h"
 #include <thread>
-#include <atomic>
+
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <mutex>
 #include <unordered_map>
+#include "fd_passing.h"
 /*
 Vehicle is the base class for all vehicles. It uses virutual functions to allow for run-time declarition of vehicle type when used in the parser.
 It provides a semi-abstract validate functions that most vehicles can just use as is, but allows for vehicles to override them if they need to.
@@ -77,21 +78,26 @@ class Vehicle {
 
 
     protected:
-        virtual void monitorLoop();
-        std::unordered_map<std::string, Waypoint> waypointMap; //cahce of waypoints
-        static std::atomic<bool> armState; //arm/disarmed
-        static std::vector<MissionItem> missionPlan; //mission plan vector
-        static std::atomic<bool> missionRunning; //is mission running?
-        static std::atomic<bool> missionNeedsStart; //does mission need to be started?(true when mission plan is loaded, but not started yet)
-        static std::atomic<bool> missionPaused;
-        static std::atomic<bool> monitorRunning;
-        static std::atomic<bool> engine;
-        static std::atomic<bool> brake;
-        pid_t childPid = -1; //TO-DO: implment reader as child process
-        std::thread monitorThread; // thread for handling vehicle state
+
+    //cache data
+    std::unordered_map<std::string, Waypoint> waypointMap; 
         
-        static std::mutex missionMutex; // mutex for mission plan access
-        static int pan_position;
-        static int tilt_position;
-        HealthStatus health;
+    //concurrency control
+    pid_t childPid = -1;
+    std::thread monitorThread;
+    virtual void monitorLoop();
+
+    //current mission plan
+    static std::mutex missionMutex;
+    static std::vector<MissionItem> missionPlan; //mission plan vector
+
+    //servo positions
+    static inline std::atomic<int> pan_position = (SERVO_PAN_START-PWM_MIN)/modifier_pan;
+    static inline std::atomic<int> tilt_position = (SERVO_TILT_START-PWM_MIN)/modifier_tilt;
+    
+    //perphial health status
+    HealthStatus health;
+
+    static SharedTelem snapshot;
+    static inline VehicleFlags flags;
     };

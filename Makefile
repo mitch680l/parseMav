@@ -10,7 +10,9 @@ OBJDIR    = bin
 # Source files grouped by target
 SRC_COMMON       = $(SRCDIR)/mavlink_usart.cpp \
                    $(SRCDIR)/helper.cpp \
-                   $(SRCDIR)/reader_lib.cpp
+                   $(SRCDIR)/reader_lib.cpp \
+                   $(SRCDIR)/fd_passing.cpp
+
 SRC_INTERPRETER  = $(SRCDIR)/main.cpp \
                    $(SRCDIR)/Vehicle.cpp \
                    $(SRCDIR)/Command.cpp \

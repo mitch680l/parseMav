@@ -53,7 +53,7 @@ int main() {
 
     std::cout << "Simulating mission Current = 1" << std::endl;
     //setCurrent(1);
-    startMissionUpload(missionPlan);
+    //startMissionUpload(missionPlan,0,true);
     int count = 0;
     while (count < 3) {
         count++;

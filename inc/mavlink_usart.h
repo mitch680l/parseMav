@@ -4,6 +4,9 @@
 #include "c_library_v2-master/ardupilotmega/mavlink.h"
 #include "config.h"
 #include "helper.h"
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -16,9 +19,9 @@ It also sets up a UART connection to the autopilot that allows for sending only.
 //Standard tx/rx implmentation for rpi(9600 baud for now).
 //int init_uart(void);
 
-
+extern int uart_fd;
 extern int cmd_fd;
-
+extern int transport_fd;
 //Mission plan item
 struct MissionItem {
         mavlink_mission_item_int_t msg;
@@ -85,8 +88,11 @@ void appendTurn(float yaw_deg, float yaw_rate, int8_t direction, bool relative, 
 /*
 begin the mission upload process.
 */
-void startMissionUpload(std::vector<MissionItem>& missionPlan);
-
+bool startPartialMissionUpload(std::vector<MissionItem>& missionPlan, int autopilot_size);
+bool startFullMissionUpload(std::vector<MissionItem>& missionPlan, uint8_t autopilot_current_seq);
+bool uploadMissionItems(const std::vector<MissionItem>& missionPlan, size_t start_index);
+void removeCompletedMissionItems(std::vector<MissionItem>& missionPlan, uint8_t autopilot_current_seq);
+bool clearAutopilotMission();
 int getMissionSize(std::vector<MissionItem>& missionPlan);
 void setMissionCurrent(uint16_t seq);
 
@@ -94,7 +100,7 @@ void sendMissionStartCommand();
 void sendMissionStopCommand();
 void sendMissionResumeCommand();
 void sendMissionPauseCommand();
-
+void respondToParamRequest();
 #ifdef __cplusplus
 }
 #endif

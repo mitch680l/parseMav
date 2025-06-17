@@ -153,27 +153,27 @@ void vincentyDirect(double lat1_deg, double lon1_deg, double bearing_deg, double
 std::string getMissionStateName(int num) {
     switch(num) {
         case 0:
-        return "FINISHED";
+        return "UKNOWN";
         break;
 
         case 1:
-        return "RUNNING";
+        return "NO MISSION";
         break;
 
         case 2:
-        return "PAUSED";
+        return "NOT STARTED";
         break;
 
         case 3:
-        return "ABORTED";
+        return "ACTIVE";
         break;
 
         case 4:
-        return "IDLE";
+        return "PAUSED";
         break;
 
         default:
-        return "UNKNOWN";
+        return "COMPLETE";
         break;
     }
 }

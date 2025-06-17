@@ -11,11 +11,51 @@
 #include <thread>
 
 
-int cmd_fd = -1;  // File descriptor for command UART
 
+int uart_fd = -1;
+int cmd_fd = -1;  // File descriptor for command UART
+int transport_fd;
 
 
 bool init_cmd_uart(void) {
+#if SIM_MODE
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        perror("[TCP_MODE] socket() failed");
+        return false;
+    }
+
+    int reuse = 1;
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(5770);
+    addr.sin_addr.s_addr = INADDR_ANY;
+
+    if (bind(sock, (sockaddr*)&addr, sizeof(addr)) < 0) {
+        perror("[TCP_MODE] bind() failed");
+        close(sock);
+        return false;
+    }
+
+    if (listen(sock, 1) < 0) {
+        perror("[TCP_MODE] listen() failed");
+        close(sock);
+        return false;
+    }
+
+    std::cout << "[TCP_MODE] Waiting for Mission Planner to connect on port 5760...\n";
+    cmd_fd = accept(sock, nullptr, nullptr);
+    if (cmd_fd < 0) {
+        perror("[TCP_MODE] accept() failed");
+        return false;
+    }
+
+    uart_fd = cmd_fd;  // Optional: unify usage
+    std::cout << "[TCP_MODE] Connected.\n";
+    return true;
+#else
     // open the same TTY write-only; termios already configured by first open
     cmd_fd = open(UART_DEVICE, O_WRONLY | O_NOCTTY | O_SYNC);
     if (cmd_fd < 0) {
@@ -26,10 +66,16 @@ bool init_cmd_uart(void) {
         return false;
     }
     return true;
+#endif
 }
 
 void Send(int fd, const uint8_t *buf, size_t len) {
+    #if SIM_MODE
+    
+    ssize_t n = write(uart_fd, buf, len);
+    #else
     ssize_t n = write(fd, buf, len);
+    #endif
     if (n < 0) {
         perror("MAVLink:UART write failed");
     } else if ((size_t)n != len) {
@@ -99,23 +145,8 @@ void SendServo(uint8_t servo, uint16_t pwm) {
 }
 
 void clearMission() {
-    mavlink_message_t msg;
-    uint8_t        buf[MAVLINK_MAX_PACKET_LEN];
-    size_t         len;
-
-    mavlink_msg_mission_clear_all_pack(
-        SYSID, COMPID, &msg,
-        TARGET_SYS,
-        TARGET_COMP,
-        MAV_MISSION_TYPE_ALL
-    );
-    len = mavlink_msg_to_send_buffer(buf, &msg);
-    Send(cmd_fd, buf, len);
-
-    pthread_mutex_lock(&shm_ptr->mutex);
-    shm_ptr->seq = 0;
-    pthread_mutex_unlock(&shm_ptr->mutex);
-    std::cout << "[MAVLink] Sent MISSION_CLEAR_ALL\n";
+    static std::vector<MissionItem> nullMission;
+    clearAutopilotMission();
 }
 
 /*
@@ -171,6 +202,25 @@ void appendWaypoint(double lat, double lon, float alt, std::vector<MissionItem>&
     int32_t lat_fixed7 = static_cast<int32_t>(std::lround(lat * 1e7));
     int32_t lon_fixed7 = static_cast<int32_t>(std::lround(lon * 1e7));
 
+    if (missionPlan.empty()) { 
+        mavlink_mission_item_int_t item{};
+        item.seq = missionPlan.size();
+        item.frame = MAV_FRAME_GLOBAL_RELATIVE_ALT_INT;
+        item.command = MAV_CMD_NAV_WAYPOINT;
+        item.current = 0;
+        item.autocontinue = 1;
+        item.param1 = 0.0f;  // hold time
+        item.param2 = 0.0f;  // acceptance radius
+        item.param3 = 0.0f;
+        item.param4 = 0.0f;
+        item.x = lat_fixed7;
+        item.y = lon_fixed7;
+        item.z = alt;
+        item.mission_type = MAV_MISSION_TYPE_MISSION;
+
+        missionPlan.push_back({item});
+    }
+       
     mavlink_mission_item_int_t item{};
     item.seq = missionPlan.size();
     item.frame = MAV_FRAME_GLOBAL_RELATIVE_ALT_INT;
@@ -221,14 +271,10 @@ void appendTurn(float yaw_deg, float yaw_rate, int8_t direction, bool relative, 
               << ", relative=" << relative << "\n";
 }
 
+/*
+void startMissionUpload(std::vector<MissionItem>& missionPlan, uint8_t current_sequence) {
+    uint8_t current_seq = current_sequence;
 
-// FSM states for mission upload handshake
-void startMissionUpload(std::vector<MissionItem>& missionPlan) {
-    pthread_mutex_lock(&shm_ptr->mutex);
-    uint8_t current_seq = shm_ptr->current_seq;
-    pthread_mutex_unlock(&shm_ptr->mutex);
-
-    //Remove Items that have been completed
     
     if (current_seq > 0 && current_seq < missionPlan.size()) {
         missionPlan.erase(missionPlan.begin(), missionPlan.begin() + current_seq);
@@ -236,10 +282,7 @@ void startMissionUpload(std::vector<MissionItem>& missionPlan) {
             missionPlan[i].msg.seq = i;
             missionPlan[i].msg.current = 0;
         }
-        //reset current_seq
-        pthread_mutex_lock(&shm_ptr->mutex);
-        shm_ptr->current_seq = 0;
-        pthread_mutex_unlock(&shm_ptr->mutex);
+        
     }
     else if (current_seq >= missionPlan.size()) {
         std::cout << "[MAVLink] All mission items already uploaded.\n";
@@ -248,10 +291,7 @@ void startMissionUpload(std::vector<MissionItem>& missionPlan) {
 
 
     uint16_t totalSize = missionPlan.size();
-    if (totalSize == 0) {
-        std::cerr << "[MAVLink:WARN] No mission items to upload.\n";
-        return;
-    }
+    
 
     // Clear vehicle mission storage
     mavlink_message_t clear_msg;
@@ -322,6 +362,7 @@ void startMissionUpload(std::vector<MissionItem>& missionPlan) {
             pthread_mutex_lock(&shm_ptr->mutex);
             shm_ptr->missionUploadState = IDLE;
             shm_ptr->missionCount = missionPlan.size();
+            shm_ptr->current_seq = 0;
             pthread_mutex_unlock(&shm_ptr->mutex);
 
             std::cout << "[MAVLink] Mission upload completed successfully.\n";
@@ -332,7 +373,7 @@ void startMissionUpload(std::vector<MissionItem>& missionPlan) {
     }
 }
 
-
+*/
 int getMissionSize(std::vector<MissionItem>& missionPlan) {
     return missionPlan.size();
 }
@@ -407,8 +448,9 @@ void sendMissionStopCommand() {
 
     size_t len = mavlink_msg_to_send_buffer(buf, &msg);
     Send(cmd_fd, buf, len);
-    std::cout << "[MAVLink] Sent mission resume\n";
+    std::cout << "[MAVLink] Sent mission stop\n";
 }
+
 void sendMissionStartCommand() {
     mavlink_message_t msg;
     uint8_t buf[MAVLINK_MAX_PACKET_LEN];
@@ -424,3 +466,275 @@ void sendMissionStartCommand() {
     std::cout << "[MAVLink] Sent mission start\n";
 }
 
+
+
+struct SimParam {
+    const char* name;
+    float value;
+};
+
+SimParam dummyParams[] = {
+    { "SYSID_THISMAV", 1.0f },
+    { "SIM_SPEED",     2.5f },
+    { "TURN_RATE",     45.0f }
+};
+const int numParams = sizeof(dummyParams) / sizeof(SimParam);
+
+void respondToParamRequest() {
+    
+    for (int i = 0; i < numParams; ++i) {
+        uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+        mavlink_message_t msg;
+        mavlink_msg_param_value_pack(
+            SYSID,
+            COMPID,
+            &msg,
+            dummyParams[i].name,
+            dummyParams[i].value,
+            MAV_PARAM_TYPE_REAL32,
+            numParams,
+            i
+        );
+    size_t len = mavlink_msg_to_send_buffer(buf, &msg);
+    Send(cmd_fd, buf, len);
+    }
+}
+
+
+// Helper function to remove completed mission items from the plan
+void removeCompletedMissionItems(std::vector<MissionItem>& missionPlan, uint8_t completed_items) {
+    if (completed_items == 0) {
+        return; // Nothing to remove
+    }
+    
+    if (completed_items >= missionPlan.size()) {
+        std::cout << "[MAVLink] All mission items completed - clearing mission plan\n";
+        missionPlan.clear();
+        return;
+    }
+    
+    // Remove completed items from the front
+    missionPlan.erase(missionPlan.begin(), missionPlan.begin() + completed_items);
+    std::cout << "[MAVLink] Removed " << static_cast<int>(completed_items) 
+              << " completed mission items\n";
+    
+    // Renumber remaining items sequentially
+    for (size_t i = 0; i < missionPlan.size(); ++i) {
+        missionPlan[i].msg.seq = i;
+        missionPlan[i].msg.current = 0;
+    }
+}
+
+// Function to clear mission on autopilot
+bool clearAutopilotMission() {
+    std::cout << "[MAVLink] Clearing autopilot mission\n";
+    
+    // Send MISSION_CLEAR_ALL
+    mavlink_message_t clear_msg;
+    uint8_t clear_buf[MAVLINK_MAX_PACKET_LEN];
+    mavlink_msg_mission_clear_all_pack(
+        SYSID, COMPID, &clear_msg,
+        TARGET_SYS, TARGET_COMP,
+        MAV_MISSION_TYPE_MISSION
+    );
+    Send(cmd_fd, clear_buf, mavlink_msg_to_send_buffer(clear_buf, &clear_msg));
+    std::cout << "[MAVLink] Sent MISSION_CLEAR_ALL\n";
+    
+    // Send MISSION_COUNT = 0
+    mavlink_message_t count_msg;
+    uint8_t count_buf[MAVLINK_MAX_PACKET_LEN];
+    mavlink_msg_mission_count_pack(
+        SYSID, COMPID, &count_msg,
+        TARGET_SYS, TARGET_COMP,
+        0,
+        MAV_MISSION_TYPE_MISSION,
+        0
+    );
+    Send(cmd_fd, count_buf, mavlink_msg_to_send_buffer(count_buf, &count_msg));
+    std::cout << "[MAVLink] Sent MISSION_COUNT = 0\n";
+    
+    // Wait for acknowledgment
+    while (true) {
+        pthread_mutex_lock(&shm_ptr->mutex);
+        MissionExecState state = shm_ptr->missionUploadState;
+        pthread_mutex_unlock(&shm_ptr->mutex);
+        
+        if (state == COMPLETED) {
+            pthread_mutex_lock(&shm_ptr->mutex);
+            shm_ptr->missionUploadState = IDLE;
+            shm_ptr->missionCount = 0;
+            shm_ptr->current_seq = 0;
+            setMissionCurrent(0);
+            pthread_mutex_unlock(&shm_ptr->mutex);
+            
+            std::cout << "[MAVLink] Mission cleared successfully\n";
+            return true;
+        }
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+}
+
+// Function to upload mission items to autopilot
+bool uploadMissionItems(const std::vector<MissionItem>& missionPlan, size_t start_index = 0) {
+    if (start_index >= missionPlan.size()) {
+        std::cout << "[MAVLink] No mission items to upload\n";
+        return true;
+    }
+    
+    size_t current_index = start_index;
+    
+    while (true) {
+        pthread_mutex_lock(&shm_ptr->mutex);
+        MissionExecState state = shm_ptr->missionUploadState;
+        pthread_mutex_unlock(&shm_ptr->mutex);
+        
+        if (state == NEXT && current_index < missionPlan.size()) {
+            const auto& item = missionPlan[current_index].msg;
+            
+            mavlink_message_t msg;
+            uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+            mavlink_msg_mission_item_int_pack(
+                SYSID, COMPID, &msg,
+                TARGET_SYS, TARGET_COMP,
+                item.seq,
+                item.frame,
+                item.command,
+                item.current,
+                item.autocontinue,
+                item.param1, item.param2, item.param3, item.param4,
+                item.x, item.y, item.z,
+                item.mission_type
+            );
+            
+            Send(cmd_fd, buf, mavlink_msg_to_send_buffer(buf, &msg));
+            std::cout << "[MAVLink] Uploaded mission item seq=" << item.seq 
+                      << " (index=" << current_index << ")\n";
+            
+            current_index++;
+            
+            pthread_mutex_lock(&shm_ptr->mutex);
+            shm_ptr->missionUploadState = (current_index >= missionPlan.size()) ? COMPLETED : RUNNING;
+            pthread_mutex_unlock(&shm_ptr->mutex);
+        }
+        
+        if (state == COMPLETED) {
+            std::cout << "[MAVLink] Mission upload completed successfully\n";
+            return true;
+        }
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+}
+
+// Full mission upload - replaces entire mission and removes completed items
+bool startFullMissionUpload(std::vector<MissionItem>& missionPlan, uint8_t completed_items) {
+    std::cout << "[MAVLink] Starting full mission upload\n";
+    
+    // Handle empty mission
+    if (missionPlan.empty()) {
+        return clearAutopilotMission();
+    }
+    
+    // Remove completed mission items
+    removeCompletedMissionItems(missionPlan, completed_items);
+    
+    // Check if all items were completed
+    if (missionPlan.empty()) {
+        return clearAutopilotMission();
+    }
+    
+    // Ensure items are numbered sequentially
+    for (size_t i = 0; i < missionPlan.size(); ++i) {
+        missionPlan[i].msg.seq = i;
+        missionPlan[i].msg.current = 0;
+    }
+    
+    // Clear existing mission
+    mavlink_message_t clear_msg;
+    uint8_t clear_buf[MAVLINK_MAX_PACKET_LEN];
+    mavlink_msg_mission_clear_all_pack(
+        SYSID, COMPID, &clear_msg,
+        TARGET_SYS, TARGET_COMP,
+        MAV_MISSION_TYPE_MISSION
+    );
+    Send(cmd_fd, clear_buf, mavlink_msg_to_send_buffer(clear_buf, &clear_msg));
+    std::cout << "[MAVLink] Sent MISSION_CLEAR_ALL\n";
+    
+    // Send mission count
+    mavlink_message_t count_msg;
+    uint8_t count_buf[MAVLINK_MAX_PACKET_LEN];
+    mavlink_msg_mission_count_pack(
+        SYSID, COMPID, &count_msg,
+        TARGET_SYS, TARGET_COMP,
+        missionPlan.size(),
+        MAV_MISSION_TYPE_MISSION,
+        0
+    );
+    Send(cmd_fd, count_buf, mavlink_msg_to_send_buffer(count_buf, &count_msg));
+    std::cout << "[MAVLink] Sent MISSION_COUNT: " << missionPlan.size() << " items\n";
+    
+    // Upload mission items
+    bool success = uploadMissionItems(missionPlan);
+    
+    if (success) {
+        pthread_mutex_lock(&shm_ptr->mutex);
+        shm_ptr->missionUploadState = IDLE;
+        shm_ptr->missionCount = missionPlan.size();
+        shm_ptr->current_seq = 0;
+        setMissionCurrent(0);
+        pthread_mutex_unlock(&shm_ptr->mutex);
+    }
+    
+    return success;
+}
+
+// Partial mission upload - appends new items to existing mission
+bool startPartialMissionUpload(std::vector<MissionItem>& missionPlan, int autopilot_size) {
+    std::cout << "[MAVLink] Starting add mission items (append mode)\n";
+    
+    
+    // Calculate how many new items we're adding and new total count
+    size_t items_to_add = missionPlan.size() - autopilot_size;
+    size_t new_total_count = autopilot_size + items_to_add;
+    
+    // Renumber the new mission items to start from current sequence
+    for (size_t i = autopilot_size; i < missionPlan.size(); ++i) {
+        missionPlan[i].msg.seq = i;
+        missionPlan[i].msg.current = 0;
+    }
+    
+    std::cout << "[MAVLink] Items will be numbered from " << static_cast<int>(autopilot_size)
+              << " to " << (new_total_count - 1) << ", new total: " << new_total_count << "\n";
+    
+    // Send partial write command to add items from current_seq onward
+    mavlink_message_t partial_msg;
+    uint8_t partial_buf[MAVLINK_MAX_PACKET_LEN];
+    mavlink_msg_mission_write_partial_list_pack(
+        SYSID, COMPID, &partial_msg,
+        TARGET_SYS, TARGET_COMP,
+        autopilot_size,           // Start index for new items
+        new_total_count - 1,             // End index (inclusive)
+        MAV_MISSION_TYPE_MISSION
+    );
+    Send(cmd_fd, partial_buf, mavlink_msg_to_send_buffer(partial_buf, &partial_msg));
+    std::cout << "[MAVLink] Sent MISSION_WRITE_PARTIAL_LIST: " << static_cast<int>(autopilot_size)
+              << " to " << (new_total_count - 1) << "\n";
+    
+    // Upload the new mission items starting from index 0 in our missionPlan vector
+    // but they will be numbered starting from current_mission_count
+    bool success = uploadMissionItems(missionPlan, autopilot_size);
+    
+    if (success) {
+        pthread_mutex_lock(&shm_ptr->mutex);
+        shm_ptr->missionUploadState = IDLE;
+        shm_ptr->missionCount = new_total_count;  // Update total count
+        pthread_mutex_unlock(&shm_ptr->mutex);
+        
+        std::cout << "[MAVLink] Successfully added " << items_to_add 
+                  << " mission items starting from sequence " << static_cast<int>(autopilot_size)
+                  << ". Total mission count now: " << new_total_count << "\n";
+    }
+    
+    return success;
+}

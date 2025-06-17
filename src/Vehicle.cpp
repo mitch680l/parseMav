@@ -1,20 +1,41 @@
 #include "Vehicle.h"
+#include <sys/stat.h> 
 #include <optional>
 std::unordered_map<std::string, Waypoint> waypointMap;
 std::vector<MissionItem> Vehicle::missionPlan;
 std::mutex Vehicle::missionMutex;
-std::atomic<bool> Vehicle::missionRunning{false};
-std::atomic<bool> Vehicle::missionNeedsStart{false};
-std::atomic<bool> Vehicle::missionPaused{false};
-std::atomic<bool> Vehicle::engine{false};
-std::atomic<bool> Vehicle::brake{false};
-std::atomic<bool> Vehicle::monitorRunning{false};
-int Vehicle::pan_position = (SERVO_PAN_START-PWM_MIN)/modifier_pan;
-int Vehicle::tilt_position = (SERVO_TILT_START-PWM_MIN)/modifier_tilt;
+SharedTelem Vehicle::snapshot;
+
 
 Vehicle::Vehicle() {
+     
+    if (!init_cmd_uart()) {
+        std::cerr << "Error: failed to open UART\n";
+    }
 
     if (LAUNCH_READER) {
+    #if SIM_MODE
+    int sockpair[2];
+    socketpair(AF_UNIX, SOCK_DGRAM, 0, sockpair);
+    
+
+    
+    pid_t pid = fork();
+    if (pid < 0) {
+        std::perror("[ERROR] fork failed");
+        return;
+    }
+
+    if (pid == 0) {
+        dup2(sockpair[1], 3);
+        execl("./reader", "reader", nullptr);
+        std::perror("[ERROR] exec failed");
+        _exit(1);
+    }
+    close(sockpair[1]);  // Close child's end
+    send_fd(sockpair[0], uart_fd);  // Pass the TCP socket
+    close(sockpair[0]);  // Done
+    #else
     pid_t pid = fork();
     if (pid < 0) {
         std::perror("[ERROR] fork failed");
@@ -26,6 +47,7 @@ Vehicle::Vehicle() {
         std::perror("[ERROR] exec failed");
         _exit(1);
     }
+    #endif
     childPid = pid;
     std::cout << "[DEBUG] Spawned helper process with PID: " << childPid << "\n";
     }
@@ -34,9 +56,7 @@ Vehicle::Vehicle() {
         std::cerr << "Error: failed to open shared memory\n";
 
     }
-    if (!init_cmd_uart()) {
-        std::cerr << "Error: failed to open UART\n";
-    }
+    
     
     loadWaypoints();
     startMonitor();
@@ -55,7 +75,6 @@ Vehicle::~Vehicle() {
 }
 
 void Vehicle::showMissionDetails() {
-    std::lock_guard<std::mutex> lock(missionMutex);
     if (missionPlan.empty()) {
         std::cout << "[" << getName() << "] No mission plan loaded.\n";
         return;
@@ -576,123 +595,167 @@ bool Vehicle::validateAdvance(const std::vector<std::string>& args) {
 void Vehicle::startMonitor() {
     SendServo(PAN_CHANNEL,SERVO_PAN_START);
     SendServo(TILT_CHANNEL,SERVO_TILT_START);
-    monitorRunning = true;
+    flags.monitorRunning = true;
     monitorThread = std::thread(&Vehicle::monitorLoop, this);
 }
 
 void Vehicle::stopMonitor() {
-    monitorRunning = false;
+    flags.monitorRunning = false;
     if (monitorThread.joinable()) {
         monitorThread.join();
     }
 }
 
 void Vehicle::monitorLoop() {
-    while (monitorRunning) {
-            const int MAX_RETRIES = 3;
+    
+    while (flags.monitorRunning) {
+        SendHeartbeat();
+        
+        
+        pthread_mutex_lock(&shm_ptr->mutex);
+        snapshot = *shm_ptr;
+        pthread_mutex_unlock(&shm_ptr->mutex);
 
-            if (!checkUartHealth()) {
-                health.uartFailCount++;
-                if (health.uartFailCount <= MAX_RETRIES && attemptReinitUart()) {
-                    std::cout << "[" << getName() << "] UART reinitialized successfully.\n";
-                    health.uartAlive = true;
-                } else {
-                    std::cout << "[" << getName() << "] UART health check failed, reinitialization failed.\n";
-                    health.uartAlive = false;
-                }
-            } else {
-                health.uartFailCount = 0;
+        const int MAX_RETRIES = 3;
+
+        if (!checkUartHealth()) {
+            health.uartFailCount++;
+            if (health.uartFailCount <= MAX_RETRIES && attemptReinitUart()) {
+                std::cout << "[" << getName() << "] UART reinitialized successfully.\n";
                 health.uartAlive = true;
-            }
-
-            if (!checkIpcPointer()) {
-                health.ipcFailCount++;
-                if (health.ipcFailCount <= MAX_RETRIES && reopenIpc()) {
-                    health.ipcAlive = true;
-                } else {
-                    health.ipcAlive = false;
-                }
             } else {
-                health.ipcFailCount = 0;
+                std::cout << "[" << getName() << "] UART health check failed, reinitialization failed.\n";
+                health.uartAlive = false;
+            }
+        } else {
+            health.uartFailCount = 0;
+            health.uartAlive = true;
+        }
+
+        if (!checkIpcPointer()) {
+            health.ipcFailCount++;
+            if (health.ipcFailCount <= MAX_RETRIES && reopenIpc()) {
                 health.ipcAlive = true;
-            }
-
-            if (!checkReaderProcess()) {
-                health.readerFailCount++;
-                if (health.readerFailCount <= MAX_RETRIES && restartReaderProcess()) {
-                    health.readerAlive = true;
-                } else {
-                    health.readerAlive = false;
-                }
             } else {
-                health.readerFailCount = 0;
-                health.readerAlive = true;
+                health.ipcAlive = false;
             }
+        } else {
+            health.ipcFailCount = 0;
+            health.ipcAlive = true;
+        }
+
+        if (!checkReaderProcess()) {
+            health.readerFailCount++;
+            if (health.readerFailCount <= MAX_RETRIES && restartReaderProcess()) {
+                health.readerAlive = true;
+            } else {
+                health.readerAlive = false;
+            }
+        } else {
+            health.readerFailCount = 0;
+            health.readerAlive = true;
+        }
         
         {
             std::lock_guard<std::mutex> lock(Vehicle::missionMutex);
-            #if DEBUG_MONITOR_STATE 
-            pthread_mutex_lock(&shm_ptr->mutex);
-            std::cout << "[" << getName() << "] MISSION STATE: "
-                      << "running: " << missionRunning
-                      << ", needs to start: " << missionNeedsStart
-                      << ", size: " << missionPlan.size() << std::endl;
-
-                      std::cout << "[" << getName() << "]" << " AUTOPILOT STATUS: " << getModeName(shm_ptr->mode)
-                      << " " << (shm_ptr->armed ? "ARMED" : "DISARMED")
-                      << std::endl;
-            pthread_mutex_unlock(&shm_ptr->mutex);
-            #endif
-
-            #if DEBUG_SHARED_TELEM
-            pthread_mutex_lock(&shm_ptr->mutex);
-            std::cout << "[" << getName() << "] Shared Telemetry State: "
-                      << "Lat: " << shm_ptr->lat
-                      << ", Lon: " << shm_ptr->lon
-                      << ", Alt: " << shm_ptr->alt
-                      << ", Yaw: " << shm_ptr->yaw_deg
-                      << ", Seq: " << shm_ptr->seq
-                      << ", Mission State: " << static_cast<int>(shm_ptr->missionState)
-                      << ", Mission Count: " << shm_ptr->missionCount
-                      << ", Current Seq: " << static_cast<int>(shm_ptr->current_seq)
-                      << ", Armed: " << shm_ptr->armed
-                      << std::endl;
-            pthread_mutex_unlock(&shm_ptr->mutex);  
-            #endif
+            
+            if(snapshot.requestParams) {
+                respondToParamRequest();
+            }
 
 
             /*
             This section should check to see that saftey systems are running IT SHOULD NOT be the initiator of those systems.
             This loop runs at 0.25 Hz(currently) which is not a good enough response time for saftey systems.
             */
-            if (!engine || brake) {
+            //engine off brake engaged
+            if (!flags.engine || flags.brake) {
                 //ensure vehicle is not running(CRITICAL)
-
+                flags.safeMove = false;
+            }
+            else {
+                flags.safeMove = true;
             }
 
+            /*
+            if auto load is on, we will automatically load the mission queue onto autopilot
+            1.) Mission is not currently running, or paused on autopilot
+            2.) There are new items on the mission queue(i.e. not empty, not completed items)
+            */
+            #if AUTO_LOAD_MISSION
+            //Check the conditions
+            //Allow load to happen if conditions are set
+            #endif
+
+            /*
+            if auto start is on we will automatically start given these condtions
+            1.) There is a mission loaded on the autopilot
+            2.) It is safe to move
+            */
+            #if AUTO_START_MISSION
             
+            #endif
 
 
-
-            
-            
-        }
-        
-        #if AUTOSTART_MISSION
-        if (shouldStart) {
-            std::cout << "[" << getName() << "] Starting mission...\n";
-            {
-                std::lock_guard<std::mutex> lock(Vehicle::missionMutex);  // re-lock just to read a safe snapshot
-                startMissionUpload(missionPlan);  // safe to pass by const-ref
+            if (flags.shouldLoad) {
+                
+                if (missionPlan.size() <= 0 || getMissionSize(missionPlan) <= static_cast<int>(snapshot.missionCountAutopilot)) {
+                
+                    std::cout << "[Monitor] Mission Upload Rejected(Mission Already Running or No new items in Plan)" << std::endl;
+                }
+                else if(snapshot.mission_state == MISSION_ACTIVE || snapshot.mission_state == MISSION_PAUSED || snapshot.mission_state == MISSION_NOT_STARTED) {
+                    //if mission is loaded to autopilot and not complete, we would prefer to just append to the mission as opposed to rewriting
+                    startPartialMissionUpload(missionPlan, static_cast<int>(snapshot.missionCountAutopilot));
+                }
+                else if (snapshot.mission_state == MISSION_COMPLETED || snapshot.mission_state == MISSION_NO_MISSION || snapshot.mission_state == MISSION_UNKNOWN) {
+                    
+                    startFullMissionUpload(missionPlan, snapshot.current_seq);
+                    
+                }
+                else {
+                    std::cout << "Unsported Case in monitor \"shouldLoad\" functionality" << std::endl;            
+                }
+                flags.shouldLoad = false;
             }
-            setMissionCurrent(0);
-            //arm
-            //setFlightMode(FlightMode::AUTO);
-            std::cout << "[" << getName() << "] Mission started.\n";
-        }
+
+            if (flags.shouldStart) {
+                
+                if (flags.safeMove) {
+                sendMissionStartCommand();
+                }
+                else {
+                    std::cout << "[" << getName() << "] " << " Is ready to start mission, but is unsafe" << std::endl;
+                }
+                flags.shouldStart = false;
+            }
+
+        #if DEBUG_MONITOR_STATE 
+            std::cout << "[" << getName() << "] MISSION STATE: "
+                      << "Safe: " <<   flags.safeMove
+                      << ", Size: " << missionPlan.size() 
+                      << ", Autopilot Size: " << static_cast<int>(snapshot.missionCountAutopilot)
+                      << ", State: " << getMissionStateName(static_cast<int>(snapshot.mission_state))
+                      << ", current mission: " << static_cast<int>(snapshot.current_seq)
+                      << std::endl;
+
+                      std::cout << "[" << getName() << "]" << " AUTOPILOT STATUS: " << getModeName(snapshot.mode)
+                      << " " << (snapshot.armed ? "ARMED" : "DISARMED")
+                      << std::endl;
+            
+            #endif
+
+        #if DEBUG_SHARED_TELEM
+        std::cout << "[" << getName() << "] Shared Telemetry State: "
+                << "Lat: " << snapshot.lat
+                << ", Lon: " << snapshot.lon
+                << ", Alt: " << snapshot.alt
+                << ", Yaw: " << snapshot.yaw_deg
+                << std::endl;
         #endif
         
+    }
         std::this_thread::sleep_for(std::chrono::seconds(4));
+    
     }
 }
 
@@ -740,7 +803,7 @@ bool Vehicle::getWaypointCoords(const std::string& name, double* lat, double* lo
 }
 
 bool Vehicle::validateMission(const std::vector<std::string>& args, const std::vector<std::string>& preArgs) {
-   const std::unordered_map<std::string, std::string> missionCommands = {
+    const std::unordered_map<std::string, std::string> missionCommands = {
         {"start", "start"},
         {"begin", "start"},
         {"initiate", "start"},
@@ -750,6 +813,7 @@ bool Vehicle::validateMission(const std::vector<std::string>& args, const std::v
         {"terminate", "stop"},
         {"resume", "resume"},
         {"continue", "resume"},
+        {"pause", "pause"},
         {"abort", "abort"},
         {"cancel", "abort"},
         {"details", "details"},
@@ -860,6 +924,7 @@ bool Vehicle::validateMode(const std::vector<std::string>& preArgs, const std::v
 
     std::string mode = args[0];
     std::string type = args[1];
+
     std::transform(mode.begin(), mode.end(), mode.begin(), ::tolower);
 
     if (mode == "auto" || mode == "manual" || mode == "guided" || mode == "rtl") {

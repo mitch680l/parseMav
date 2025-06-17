@@ -365,6 +365,11 @@ private:
      */
     bool prepareFifo() {
         // Open existing FIFO for reading (non-blocking)
+        if (mkfifo("/tmp/speech_pipe", 0666) == -1) {
+        if (errno != EEXIST) {
+            std::cerr << "Failed to create FIFO: " << strerror(errno) << "\n";
+        }
+    }
         m_fifoFd = open(m_fifoPath.c_str(), O_RDONLY | O_NONBLOCK);
         if (m_fifoFd < 0) {
             std::cerr << "[" << getCallsignString() << "] Failed to open FIFO " << m_fifoPath 

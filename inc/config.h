@@ -1,5 +1,5 @@
 #pragma once
-
+#include <atomic>
 //mavlink indenfication
 #define SYSID 1 
 #define COMPID MAV_COMP_ID_MISSIONPLANNER
@@ -22,8 +22,10 @@
 
 
 //perphial settings
-#define UART_DEVICE "/dev/ttyAMA0" // OS resource for uart connection
+#define UART_DEVICE "/dev/serial/by-id/usb-Hex_ProfiCNC_CubeOrange_280028000C51313132383631-if00" // OS resource for uart connection
 //sudo ls /dev/serial/by-id/
+//serial 0
+
 #define ShM_NAME "/mavlink_shm" // shared memory name for IPC
 #define FIFO_PATH "/tmp/speech_pipe" // path to the named pipe for speech input *IF PROGRAM IS NOT WORKING, ITS POSSIBLE THIS FILE GOT DELETED or CORRUPTED* (use mkfifo /tmp/speech_pipe)
 #define WAYPOINTS_FILE "../waypoints.csv" // path to the waypoints file
@@ -39,13 +41,14 @@
 #define SERVO_TILT_START 1500 //start position for tilt servo
 inline double modifier_tilt = (PWM_MAX - PWM_MIN) / SERVO_RANGE_TILT; //ratio of pwm to degrees(example max = 2500, min = 500, range = 180, modifier = (2500-500)/180 = 11.11) so for every degree, its 11.11 pwm
 inline double modifier_pan = (PWM_MAX - PWM_MIN) / SERVO_RANGE_PAN; //ratio of pwm to degrees(example max = 2500, min = 500, range = 360, modifier = (2500-500)/360 = 5.56) so for every degree, its 5.56 pwm
-
+//param set SERIAL0_BAUD 57600
+//param show SERIAL0_BAUD
 
 //flags for debug outputs
-#define DEBUG_SEND false
+#define DEBUG_SEND 1
 #define DEBUG_MONITOR_STATE true
-#define DEBUG_SHARED_TELEM false
-#define DEBUG_PREARM_MESSAGES 1
+#define DEBUG_SHARED_TELEM true
+#define DEBUG_PREARM_MESSAGES 0
 #define DEBUG_POSITION_MESSAGES     0
 #define DEBUG_ATTITUDE_MESSAGES     0
 #define DEBUG_SYSTEM_MESSAGES       0
@@ -58,12 +61,14 @@ inline double modifier_pan = (PWM_MAX - PWM_MIN) / SERVO_RANGE_PAN; //ratio of p
 #define DEBUG_NAVIGATION_MESSAGES   0
 #define DEBUG_MISC_MESSAGES        0
 #define DEBUG_RC_MESSAGES          0
+#define DEBUG_SIM_MESSAGES          0
+#define SIM_MODE 1
 
 
 //operation settings
 #define AUTO_START_MISSION false //automatically start mission on startup (given that a mission is loaded and its safe to do so)
 #define AUTO_LOAD_MISSION false //automatically load missions when items are added to the mission queue
-#define MISSION_MODE false //preference to add commands to a mission queue versus executing them immediately. I.e. advance 100 meters is a target_global versus a waypoint
+#define MISSION_MODE false //preference to add commands to a mission queue versus executing them immediately. I.e. advance 100 meters is a target_global versus a waypoint(TO DO(MAYBE))
 enum class VehicleType { COPTER, PLANE, ROVER };
 
 
@@ -75,11 +80,12 @@ enum MissionExecState {
     COMPLETED
 };
 enum MissionState {
-    MISSION_FINISHED = 0,
-    MISSION_RUNNING = 1,
-    MISSION_PAUSED  = 2,
-    MISSION_ABORTED = 3,
-    MISSION_IDLE = 4
+    MISSION_UNKNOWN = 0,
+    MISSION_NO_MISSION = 1,
+    MISSION_NOT_STARTED = 2,
+    MISSION_ACTIVE = 3,
+    MISSION_PAUSED = 4,
+    MISSION_COMPLETED = 5
 };
 /*
 This is the shared memory structure that is used to share data between the reader and the main program.
@@ -90,11 +96,27 @@ struct SharedTelem {
     double            yaw_deg;
     uint64_t          seq;            
     MissionExecState  missionUploadState;   
-    uint32_t          missionCount;   
+    uint32_t          missionCount;
+    uint32_t          missionCountAutopilot;   
     uint8_t           current_seq;
     bool              armed;
     int               mode;
     MissionState      mission_state;
+    bool              requestParams;
+};
+
+struct VehicleFlags {
+    static inline std::atomic<bool> missionRunning{false};
+    static inline std::atomic<bool> missionNeedsStart{false}; 
+    static inline std::atomic<bool> missionPaused{false};
+    static inline std::atomic<bool> monitorRunning{false};
+    static inline std::atomic<bool> engine{false};
+    static inline std::atomic<bool> brake{false};
+    static inline std::atomic<bool> shouldStart{false};
+    static inline std::atomic<bool> shouldLoad{false};
+    static inline std::atomic<bool> newItems{false};
+    static inline std::atomic<bool> armState{false};
+    static inline std::atomic<bool> safeMove{false};
 };
 
 extern SharedTelem* shm_ptr;
@@ -107,12 +129,5 @@ struct HealthStatus {
     int ipcFailCount     = 0;
     int readerFailCount  = 0;
 };
-
-
-
-
-
-
-
 
 
